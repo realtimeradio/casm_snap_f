@@ -137,8 +137,7 @@ function fft_12i_8192pt_18i18o_core_config(this_block)
 
   %    this_block.addFile('');
   %    this_block.addFile('');
-  %this_block.addFile('fft_2048ch_6a_core/sysgen/fft_2048ch_6a_core.vhd');
-  this_block.addFile('fft_12i_8192pt_18i18o_core_ip_struct.vhd');
+  this_block.addFile('ip_cores/fft_12i_8192pt_18i18o_core_ip_struct.vhd');
 
 return;
 

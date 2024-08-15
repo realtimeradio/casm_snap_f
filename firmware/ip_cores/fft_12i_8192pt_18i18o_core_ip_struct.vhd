@@ -18,7 +18,7 @@ entity fft_12i_8192pt_18i18o_core_ip_struct is
     in10 : in std_logic_vector( 18-1 downto 0 );
     in11 : in std_logic_vector( 18-1 downto 0 );
     shift : in std_logic_vector( 16-1 downto 0 );
-    sync : in std_logic_vector( 1 downto 0 );
+    sync : in std_logic_vector( 1-1 downto 0 );
     clk_1 : in std_logic;
     ce_1 : in std_logic;
     out0 : out std_logic_vector( 36-1 downto 0 );

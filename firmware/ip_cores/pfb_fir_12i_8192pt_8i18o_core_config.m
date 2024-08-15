@@ -155,8 +155,7 @@ function pfb_fir_12i_8192pt_8i18o_core_config(this_block)
 
   %    this_block.addFile('');
   %    this_block.addFile('');
-  %this_block.addFile('pfb_fir_2048ch_core/sysgen/pfb_fir_2048ch_core.vhd');
-  this_block.addFile('pfb_fir_12i_8192pt_8i18o_core_ip_struct.vhd');
+  this_block.addFile('ip_cores/pfb_fir_12i_8192pt_8i18o_core_ip_struct.vhd');
 
 return;
 
