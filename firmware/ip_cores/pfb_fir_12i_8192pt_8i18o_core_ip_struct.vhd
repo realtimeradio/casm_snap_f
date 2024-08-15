@@ -37,7 +37,7 @@ entity pfb_fir_12i_8192pt_8i18o_core_ip_struct is
 end pfb_fir_12i_8192pt_8i18o_core_ip_struct;
 
 architecture structural of pfb_fir_12i_8192pt_8i18o_core_ip_struct is
-  component pfb_fir_12i_8192pt_8i18o_core_ip
+  component pfb_fir_12i_8192pt_8i18o_core
     port ( 
       in0 : in std_logic_vector( 8-1 downto 0 );
       in1 : in std_logic_vector( 8-1 downto 0 );
@@ -69,7 +69,7 @@ architecture structural of pfb_fir_12i_8192pt_8i18o_core_ip_struct is
     );
   end component;
 begin
-  pfb_fir_12i_8192pt_8i18o_core_ip_inst : pfb_fir_12i_8192pt_8i18o_core_ip  
+  pfb_fir_12i_8192pt_8i18o_core_ip_inst : pfb_fir_12i_8192pt_8i18o_core
   port map (
     in0 => in0,
     in1 => in1,

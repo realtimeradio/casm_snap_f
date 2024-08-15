@@ -44,7 +44,7 @@ function fft_12i_8192pt_18i18o_core_config(this_block)
   this_block.addSimulinkOutport('overflow');
 
   overflow_port = this_block.port('overflow');
-  overflow_port.setType('UFix_4_0');
+  overflow_port.setType('UFix_3_0');
   out0_port = this_block.port('out0');
   out0_port.setType('UFix_36_0');
   out1_port = this_block.port('out1');

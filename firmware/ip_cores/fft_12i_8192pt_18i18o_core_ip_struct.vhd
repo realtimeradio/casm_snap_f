@@ -27,13 +27,13 @@ entity fft_12i_8192pt_18i18o_core_ip_struct is
     out3 : out std_logic_vector( 36-1 downto 0 );
     out4 : out std_logic_vector( 36-1 downto 0 );
     out5 : out std_logic_vector( 36-1 downto 0 );
-    overflow : out std_logic_vector( 4-1 downto 0 );
+    overflow : out std_logic_vector( 3-1 downto 0 );
     sync_out : out std_logic_vector( 1-1 downto 0 )
   );
 end fft_12i_8192pt_18i18o_core_ip_struct;
 
 architecture structural of fft_12i_8192pt_18i18o_core_ip_struct is
-  component fft_12i_8192pt_18i18o_core_ip
+  component fft_12i_8192pt_18i18o_core
     port (
       in0 : in std_logic_vector( 18-1 downto 0 );
       in1 : in std_logic_vector( 18-1 downto 0 );
@@ -56,12 +56,12 @@ architecture structural of fft_12i_8192pt_18i18o_core_ip_struct is
       out3 : out std_logic_vector( 36-1 downto 0 );
       out4 : out std_logic_vector( 36-1 downto 0 );
       out5 : out std_logic_vector( 36-1 downto 0 );
-      overflow : out std_logic_vector( 4-1 downto 0 );
+      overflow : out std_logic_vector( 3-1 downto 0 );
       sync_out : out std_logic_vector( 1-1 downto 0 )
     );
   end component;
 begin
-  fft_12i_8192pt_18i18o_core_ip_inst : fft_12i_8192pt_18i18o_core_ip
+  fft_12i_8192pt_18i18o_core_ip_inst : fft_12i_8192pt_18i18o_core
   port map (
     in0 => in0, 
     in1 => in1, 
