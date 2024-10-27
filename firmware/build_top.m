@@ -14,4 +14,4 @@ function build_top()
     open_system(design);
     t0=datetime; a = jasper_frontend; system([a ' --jobs 16']); t1=datetime;
     build_duration = t1 - t0
-    close_system(core, 0);
+    close_system(design, 0);
