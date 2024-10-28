@@ -52,7 +52,7 @@ The version of the `tcpborphserver` installed in this image is available in this
    make
    sudo make install
    ```
-7. Configure `tcpborphserver3` to start on boot. The following file, saved as `/etc/init.d/tcpborphserver3` is one way to do this:
+7. Configure `tcpborphserver3` to start on boot. One way to do this is to save the following file as `/etc/init.d/tcpborphserver3`, then run `sudo chmod 755 /etc/init.d/tcpborphserver && sudo update-rc.d tcpborphserver3 defaults`
    ```
    #!/bin/sh
    ### BEGIN INIT INFO
