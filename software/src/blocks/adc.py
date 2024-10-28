@@ -1,26 +1,7 @@
 import logging
-import numpy as np
-import struct
-import socket
-import time
-import progressbar
-import casperfpga
 from .. import helpers
 from ..error_levels import *
 from .block import Block
-
-TAP_STEP_SIZE = 8
-NSAMPLES = 256
-NBOARDS = 2
-NFMCS = 2
-
-CONTROL_REG = 'sync'
-
-RST_BIT = 0
-EXT_SS_TRIG_EN_BIT = 1
-SS_TRIG_BIT = 2
-EXT_SYNC_EN_BIT = 3
-SYNC_BIT = 4
 
 class Adc(Block):
     """
@@ -32,12 +13,35 @@ class Adc(Block):
     :param name: Name of block in Simulink hierarchy.
     :type name: str
 
+    :param sample_rate_mhz: Target sample rate in MHz
+    :type sample_rate_mhz: float
+
     :param logger: Logger instance to which log messages should be emitted.
     :type logger: logging.Logger
     """
 
-    def __init__(self, host, name, logger=None, passive=False):
+    def __init__(self, host, name, logger=None, sample_rate_mhz=250.):
         super(Adc, self).__init__(host, name, logger)
-        # Check which ADCs are connected. Only if no ADC chips on an FMC board
-        # respond do we ignore a port
-        self.adcs = []
+        self.adc = None
+        self.sample_rate_mhz = sample_rate_mhz
+    def initialize(self, read_only=False):
+        """
+        Initialize the block.
+
+        :param read_only: If True, do nothing. If False, configure the ADC.
+        :type read_only: bool
+
+        """
+        if read_only:
+            pass
+        else:
+            try:
+                self.adc = self.host.adcs[self.prefix + 'snap_adc']
+            except AttributeError:
+                self._error("Failed to find ADC. Have you provided an FPG file?")
+                raise RuntimeError
+            self._info("Training ADC link")
+            err = self.adc.init(sample_rate=self.sample_rate_mhz, numChannel=4, verify=True)
+            self._info(f"Link training returned {err}")
+            if err != self.adc.SUCCESS:
+                raise RuntimeError(f"ADC initialization failed with code {err}")
