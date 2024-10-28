@@ -28,10 +28,10 @@ from .blocks import eth
 from .blocks import corr
 
 PIPELINES_PER_XENG = 4
-FS_HZ = 196000000 # ADC sample rate in Hz
+FS_MHZ = 250. # ADC sample rate in MHz
 
-NINPUTS = 12  # ADC inputs per SNAP
-NCHANS  = 2**12 # Frequency channels per input
+N_INPUTS = 12  # ADC inputs per SNAP
+N_CHANS  = 2**12 # Frequency channels per input
 FENG_SOURCE_PORT = 10000 # UDP source port for data transmission
 MAC_BASE = 0x020203030400 # MAC base address for 10GbE interface
 IP_BASE = (10 << 24) + (41 << 16) + (0 << 8) + 100 # IP base address for 10GbE interface
@@ -46,10 +46,11 @@ class SnapFengine():
     :param logger: Logger instance to which log messages should be emitted.
     :type logger: logging.Logger
 
+    :param fpgfile: If provided, scrape information from the fpgfile.
+
     """
-    def __init__(self, host, has_ddc=False, logger=None):
-        self.hostname = host #: hostname of the F-Engine's host SNAP2 board
-        self.has_ddc = has_ddc
+    def __init__(self, host, logger=None, fpgfile=None):
+        self.hostname = host #: hostname of the F-Engine's host board
         #: Python Logger instance
         self.logger = logger or helpers.add_default_log_handlers(logging.getLogger(__name__ + ":%s" % (host)))
         #: Underlying CasperFpga control instance
@@ -57,15 +58,16 @@ class SnapFengine():
                         host=self.hostname,
                         transport=casperfpga.KatcpTransport,
                     )
-        #try:
-        #    self._cfpga.get_system_information()
-        #except:
-        #    self.logger.error("Failed to read and decode .fpg header from flash")
-        self.blocks = {}
+        if fpgfile is not None:
+            try:
+                self._cfpga.get_system_information(fpgfile)
+            except:
+                self.logger.error(f"Failed to read and decode {fpgfile}")
+            self.blocks = {}
         try:
             self._initialize_blocks()
         except:
-            self.logger.exception("Failed to inialize firmware blocks. "
+            self.logger.exception("Failed to initialize firmware blocks. "
                                   "Maybe the board needs programming.")
 
     def is_connected(self):
@@ -88,24 +90,24 @@ class SnapFengine():
         #: Control interface to high-level FPGA functionality
         self.fpga        = fpga.Fpga(self._cfpga, "")
         #: Control interface to ADC block
-        self.adc         = adc.Adc(self._cfpga, 'adc')
+        self.adc         = adc.Adc(self._cfpga, 'adc', sample_rate_mhz=FS_MHZ)
         #: Control interface to Synchronization / Timing block
         self.sync        = sync.Sync(self._cfpga, 'sync')
         #: Control interface to Noise Generation block
         self.noise       = noisegen.NoiseGen(self._cfpga, 'noise', n_noise=2, n_outputs=N_INPUTS)
         #: Control interface to Input Multiplex block
-        self.input       = input.Input(self._cfpga, 'input', n_signals=N_INPUTS, n_streams=1, is_complex=False)
+        self.input       = input.Input(self._cfpga, 'input', n_streams=16, n_bits=8)
         #: Control interface to Coarse Delay block
         self.delay       = delay.Delay(self._cfpga, 'delay', n_streams=N_INPUTS)
         #: Control interface to PFB block
         self.pfb         = pfb.Pfb(self._cfpga, 'pfb')
-        ##: Control interface to Autocorrelation block
-        #self.autocorr    = autocorr.AutoCorr(self._cfpga, 'autocorr',
-        #                                     n_signals=N_INPUTS,
-        #                                     n_parallel_streams=1,
-        #                                     n_cores=2,
-        #                                     use_mux=False,
-        #                                     )
+        #: Control interface to Autocorrelation block
+        self.autocorr    = autocorr.AutoCorr(self._cfpga, 'autocorr',
+                                             n_signals=N_INPUTS,
+                                             n_parallel_streams=1,
+                                             n_cores=N_INPUTS//2,
+                                             use_mux=True,
+                                             )
         #: Control interface to Equalization block
         self.eq          = eq.Eq(self._cfpga, 'eq', n_streams=N_INPUTS, n_coeffs=2**9)
         #: Control interface to post-equalization Test Vector Generator block
