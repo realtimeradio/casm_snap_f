@@ -103,19 +103,20 @@ class SnapFengine():
         self.pfb         = pfb.Pfb(self._cfpga, 'pfb')
         #: Control interface to Autocorrelation block
         self.autocorr    = autocorr.AutoCorr(self._cfpga, 'autocorr',
+                                             acc_len=1024,
                                              n_signals=N_INPUTS,
                                              n_parallel_streams=1,
                                              n_cores=N_INPUTS//2,
                                              use_mux=True,
                                              )
         #: Control interface to Equalization block
-        self.eq          = eq.Eq(self._cfpga, 'eq', n_streams=N_INPUTS, n_coeffs=2**9)
+        self.eq          = eq.Eq(self._cfpga, 'eq', n_inputs=N_INPUTS, n_parallel_inputs=N_INPUTS//2, n_coeffs=N_CHANS//8)
         #: Control interface to post-equalization Test Vector Generator block
-        self.eqtvg       = eqtvg.EqTvg(self._cfpga, 'post_eq_tvg', n_streams=N_INPUTS, n_chans=N_CHANS)
+        self.eqtvg       = eqtvg.EqTvg(self._cfpga, 'eqtvg', n_streams=N_INPUTS, n_chans=N_CHANS)
         #: Control interface to Channel Reorder block
         self.reorder     = chanreorder.ChanReorder(self._cfpga, 'chan_reorder', n_chans=N_CHANS)
         #: Control interface to Packetizer block
-        self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=196.608)
+        self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=FS_MHZ)
         #: Control interface to 10GbE interface block
         self.eth         = eth.Eth(self._cfpga, 'eth')
         #: Control interface to Correlation block

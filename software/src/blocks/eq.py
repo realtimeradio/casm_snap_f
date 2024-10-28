@@ -15,8 +15,11 @@ class Eq(Block):
     :param logger: Logger instance to which log messages should be emitted.
     :type logger: logging.Logger
 
-    :param n_streams: Number of independent streams which may be delayed
-    :type n_streams: int
+    :param n_inputs: Number of independent inputs to which coefficients are applied
+    :type n_inputs: int
+
+    :param n_parallel_inputs: Number of parallel inputs to which coefficients are applied
+    :type n_parallel_inputs: int
 
     :param n_coeffs: Number of coefficients per input stream. Coefficients
         are shared among neighbouring frequency channels.
@@ -24,22 +27,25 @@ class Eq(Block):
 
     """
     _WIDTH = 16 #: Coefficient bit width
-    _BP = 2     #: Coefficient binary point position
+    _BP = 5     #: Coefficient binary point position
     _FORMAT = 'H'#'L' 
-    def __init__(self, host, name, n_streams=64, n_coeffs=2**9, logger=None):
+    def __init__(self, host, name, n_inputs=12, n_parallel_inputs=12//2, n_coeffs=2**9, logger=None):
         super(Eq, self).__init__(host, name, logger)
-        self.n_streams = n_streams
+        self.n_inputs = n_inputs
+        self.n_parallel_inputs = n_parallel_inputs
+        assert n_inputs % n_parallel_inputs == 0
+        self.n_serial_inputs = n_inputs // n_parallel_inputs
         self.n_coeffs = n_coeffs
         self._stream_size = struct.calcsize(self._FORMAT)*self.n_coeffs
 
-    def set_coeffs(self, stream, coeffs):
+    def set_coeffs(self, inputid, coeffs):
         """
         Set the coefficients for a data stream.
         Rounding and saturation will be applied before loading, so the provided
         coefficients may be integer or floating point.
         
-        :param stream: ADC stream index to which coefficients should be applied.
-        :type stream: int
+        :param inputid: ADC stream index to which coefficients should be applied.
+        :type inputid: int
 
         :param coeffs: Array of coefficients to load. This should be of length
             ``self.n_coeffs``, else an AssertionError will be raised.
@@ -57,9 +63,9 @@ class Eq(Block):
         coeffs = list(coeffs)
         assert len(coeffs) == self.n_coeffs, "Length of provided coefficient vector should be %d" % self.n_coeffs
         coeffs_str = struct.pack('>%d%s' % (len(coeffs), self._FORMAT), *coeffs)
-        coeff_reg = 'core%d_coeffs' % (stream // 16)
-        stream_sub_index = stream % 16
-        self.write(coeff_reg, coeffs_str, offset=self._stream_size * stream_sub_index)
+        coeff_reg = 'core_coeffs%d' % (inputid // self.n_serial_inputs)
+        serial_index = inputid % self.n_serial_inputs
+        self.write(coeff_reg, coeffs_str, offset=self._stream_size * serial_index)
 
     def plot_all_coefficients(self, db=False):
         """
@@ -70,7 +76,7 @@ class Eq(Block):
 
         """
         from matplotlib import pyplot as plt
-        for i in range(self.n_streams):
+        for i in range(self.n_inputs):
             coeffs = self.get_coeffs(i)
             if db:
                 coeffs = 20*np.log10(coeffs)
@@ -78,7 +84,7 @@ class Eq(Block):
         plt.legend()
         plt.show()
 
-    def get_coeffs(self, stream, return_as_int=False):
+    def get_coeffs(self, inputid, return_as_int=False):
         """
         Get the coefficients currently loaded.
         Reads the actual coefficients from the board, returning these
@@ -86,8 +92,8 @@ class Eq(Block):
         back to ``set_coeffs``) or as an integers with a scaling factor
         (which reflects precisely the values stored in the firmware registers).
 
-        :param stream: ADC stream index to query.
-        :type stream: int
+        :param inputid: ADC inputid index to query.
+        :type inputid: int
 
         :param return_as_int: If True, return a tuple containing integer
             coefficients as stored on the FPGA, and a binary point scale.
@@ -105,9 +111,9 @@ class Eq(Block):
         :rtype: (numpy.ndarray, int) or numpy.ndarray
 
         """
-        coeff_reg = 'core%d_coeffs' % (stream // 16)
-        stream_sub_index = stream % 16
-        coeffs_str = self.read(coeff_reg, self._stream_size, offset= self._stream_size * stream_sub_index)
+        coeff_reg = 'core_coeffs%d' % (inputid // self.n_serial_inputs)
+        serial_index = inputid % self.n_serial_inputs
+        coeffs_str = self.read(coeff_reg, self._stream_size, offset= self._stream_size * serial_index)
         coeffs = np.array(struct.unpack('>%d%s' % (self.n_coeffs, self._FORMAT), coeffs_str))
         if return_as_int:
             return coeffs, self._BP
@@ -122,10 +128,7 @@ class Eq(Block):
         :rtype: int
 
         """
-        clip_cnt = 0
-        for i in range(self.n_streams // 16):
-            clip_cnt += self.read_uint('core%d_clip_cnt' % i)
-        return clip_cnt
+        return self.read_uint('core_clip_cnt')
 
     def get_status(self):
         """
@@ -149,7 +152,7 @@ class Eq(Block):
         stats = {}
         flags = {}
         stats['clip_count'] = self.clip_count()
-        for stream in range(self.n_streams):
+        for stream in range(self.n_inputs):
             coeffs, bp = self.get_coeffs(stream, return_as_int=True)
             stats['coefficients%.2d' % stream] = coeffs.tolist()
             assert bp == self._BP, "Software hardcoded for all coefficient BPs the same"
@@ -169,5 +172,5 @@ class Eq(Block):
         COEFF = 300.
         if read_only:
             return
-        for stream in range(self.n_streams):
+        for stream in range(self.n_inputs):
             self.set_coeffs(stream, COEFF*np.ones(self.n_coeffs,dtype='>%s'%self._FORMAT))
