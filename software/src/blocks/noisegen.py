@@ -87,10 +87,10 @@ class NoiseGen(Block):
         assert (noise < 2*self.n_noise), "Tried to assign noise source >= 2*self.n_noise"
         assert (output < self.n_outputs), "Tried to assign an output >= self.n_outputs"
         # Control is in blocks of 8. Which block do we need?
-        octal_block = output // 8
-        octal_index = output % 8
-        ctrl_reg = "octal_mux%d_sel" % octal_block
-        self.change_reg_bits(ctrl_reg, noise, 4*octal_index, 4)
+        hex_block = output // 16
+        hex_index = output % 16
+        ctrl_reg = "sixteen_mux%d_sel" % hex_block
+        self.change_reg_bits(ctrl_reg, noise, 2*hex_index, 2)
 
     def get_output_assignment(self, output):
         """
@@ -106,11 +106,11 @@ class NoiseGen(Block):
         :rtype: int
         """
         assert (output < self.n_outputs), "Tried to assign an output >= self.n_outputs"
-        # Control is in blocks of 8. Which block do we need?
-        octal_block = output // 8
-        octal_index = output % 8
-        ctrl_reg = "octal_mux%d_sel" % octal_block
-        noise = self.get_reg_bits(ctrl_reg, 4*octal_index, 4)
+        # Control is in blocks of 16. Which block do we need?
+        hex_block = output // 16
+        hex_index = output % 16
+        ctrl_reg = "sixteen_mux%d_sel" % hex_block
+        noise = self.get_reg_bits(ctrl_reg, 2*hex_index, 2)
         return noise
 
     def initialize(self, read_only=False):
