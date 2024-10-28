@@ -9,6 +9,29 @@ from .. import __fwversion__
 
 import casperfpga.sysmon
 
+VCCBRAM_MIN_WARN = 0.97
+VCCBRAM_MAX_WARN = 1.03
+VCCBRAM_MIN_ERR = -0.5
+VCCBRAM_MAX_ERR = 1.1
+VCCAUX_MIN_WARN = 1.71
+VCCAUX_MAX_WARN = 1.89
+VCCAUX_MIN_ERR = -0.5
+VCCAUX_MAX_ERR = 2.
+VCCINT_MIN_WARN = 0.97
+VCCINT_MAX_WARN = 1.03
+VCCINT_MIN_ERR = -0.5
+VCCINT_MAX_ERR = 1.1
+TEMP_MIN_WARN = 20.
+TEMP_MAX_WARN = 65.
+TEMP_MIN_ERR = 0. 
+TEMP_MAX_ERR = 85.
+
+FPGA_CLK_MAX_WARN = 255.
+FPGA_CLK_MIN_WARN = 245.
+
+class Xadc(casperfpga.sysmon.Sysmon):
+    reg = 'xadc'
+
 class Fpga(Block):
     """
     Instantiate a control interface for top-level FPGA control.
@@ -26,7 +49,7 @@ class Fpga(Block):
     def __init__(self, host, name, logger=None):
         # Top-level F-engine sees all registers
         super(Fpga, self).__init__(host, name, logger)
-        self.sysmon = casperfpga.sysmon.Sysmon(self.host)
+        self.sysmon = Xadc(self.host)
 
     def get_fpga_clock(self):
         """
@@ -174,7 +197,7 @@ class Fpga(Block):
         stats['sw_version'] = __version__
         fpga_clk_mhz = self.get_fpga_clock()
         stats['fpga_clk_mhz'] = fpga_clk_mhz
-        if fpga_clk_mhz > 200. or fpga_clk_mhz < 190.:
+        if fpga_clk_mhz > FPGA_CLK_MAX_WARN or fpga_clk_mhz < FPGA_CLK_MIN_WARN:
             flags['fpga_clk_mhz'] = FENG_ERROR
         if stats['programmed']:
             stats['fw_version'] = self.get_firmware_version()
@@ -194,23 +217,23 @@ class Fpga(Block):
         if stats['sw_version'].endswith('dirty'):
             flags['sw_version'] = FENG_WARNING
         if 'vccaux' in stats:
-            if stats['vccaux'] < 1.746 or stats['vccaux'] > 1.854:
+            if stats['vccaux'] < VCCAUX_MIN_WARN or stats['vccaux'] > VCCAUX_MAX_WARN:
                 flags['vccaux'] = FENG_WARNING
-            if stats['vccaux'] < -0.5 or stats['vccaux'] > 2.0:
+            if stats['vccaux'] < VCCAUX_MIN_ERR or stats['vccaux'] > VCCAUX_MAX_ERR:
                 flags['vccaux'] = FENG_ERROR
         if 'vccbram' in stats:
-            if stats['vccbram'] < 0.922 or stats['vccbram'] > 0.979:
+            if stats['vccbram'] < VCCBRAM_MIN_WARN or stats['vccbram'] > VCCBRAM_MAX_WARN:
                 flags['vccbram'] = FENG_WARNING
-            if stats['vccbram'] < -0.5 or stats['vccbram'] > 1.1:
+            if stats['vccbram'] < VCCBRAM_MIN_ERR or stats['vccbram'] > VCCBRAM_MAX_ERR:
                 flags['vccbram'] = FENG_ERROR
         if 'vccint' in stats:
-            if stats['vccint'] < 0.922 or stats['vccint'] > 0.979:
+            if stats['vccint'] < VCCINT_MIN_WARN or stats['vccint'] > VCCINT_MAX_WARN:
                 flags['vccint'] = FENG_WARNING
-            if stats['vccint'] < -0.5 or stats['vccint'] > 1.1:
+            if stats['vccint'] < VCCINT_MIN_ERR or stats['vccint'] > VCCINT_MAX_ERR:
                 flags['vccint'] = FENG_ERROR
         if 'temp' in stats:
-            if stats['temp'] < 0 or stats['temp'] > 85:
+            if stats['temp'] < TEMP_MIN_WARN or stats['temp'] > TEMP_MAX_WARN:
                 flags['temp'] = FENG_WARNING
-            if stats['temp'] > 125:
+            if stats['temp'] < TEMP_MIN_ERR or stats['temp'] > TEMP_MAX_ERR:
                 flags['temp'] = FENG_ERROR
         return stats, flags
