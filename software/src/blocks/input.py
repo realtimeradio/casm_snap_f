@@ -22,84 +22,139 @@ class Input(Block):
     :param logger: Logger instance to which log messages should be emitted.
     :type logger: logging.Logger
 
-    :param n_signals: Number of independent signals
-    :type n_signals: int
+    :param n_streams: Number of independent streams which may be delayed
+    :type n_streams: int
 
-    :param dtype: Numpy-style data type specification for an ADC sample
-    :type dtype: str
+    :param n_bits: Number of bits per ADC sample.
+    :type n_bits: int
 
-    :param is_complex: True is input samples are complex. False otherwise.
-
-    :ivar n_streams: Number of parallel samples per signal.
-    :ivar n_streams: int
+    :ivar n_streams: Number of streams this interface handles
+    :ivar n_bits: Number of bits per ADC sample
     """
-    _REAL_SNAPSHOT_SAMPLES_PER_POL = 16384
+    _USE_NOISE = 0
+    _USE_ADC   = 1
+    _USE_ZERO  = 2
+    _USE_COUNTER = 3
+    _INT_TO_POS = {}
+    _INT_TO_POS[_USE_NOISE] = 'noise'
+    _INT_TO_POS[_USE_ADC]   = 'adc'
+    _INT_TO_POS[_USE_ZERO]  = 'zero'
+    _INT_TO_POS[_USE_COUNTER] = 'counter'
+    _SNAPSHOT_SAMPLES_PER_POL = 1024
 
-    def __init__(self, host, name, n_signals=2, n_streams=16, dtype='>i2', is_complex=False, logger=None):
+    def __init__(self, host, name, n_streams=64, n_bits=10, logger=None):
         super(Input, self).__init__(host, name, logger)
         self.n_streams = n_streams
-        self.n_signals = n_signals
-        self.dtype = dtype
-        self.is_complex = is_complex
-        if is_complex:
-            self.n_sample_bytes = 2*np.dtype(dtype).itemsize
-            self._snapshot_samples_per_pol = self._REAL_SNAPSHOT_SAMPLES_PER_POL // 2
+        self.n_bits = n_bits
+
+    def get_switch_positions(self):
+        """
+        Get the positions of the input switches.
+
+        :return: List of switch positions. Entry ``n`` contains the position
+            of the switch associated with ADC input ``n``. Switch positions
+            are "noise" (internal digital noise generators), "adc"
+            (digitized ADC stream), or "zero" (constant 0).
+        :rtype: list of str
+
+        """
+        pos = []
+        for regn in range(self.n_streams // 16):
+            reg_val = self.read_uint('source_sel%d' % regn)
+            for i in range(16):
+                # MSBs of control signals are for first input
+                v = (reg_val >> (2*(15-i))) & 0b11
+                pos += [self._INT_TO_POS[v]]
+        return pos
+                
+
+    def _switch(self, val, stream=None):
+        """
+        Set the switch position of a single input stream.
+        
+        :param val: mux select value desired.
+        :type val: int
+
+        :param stream: Which stream to switch. If None, switch all.
+        :type stream: int or None
+
+        """
+        assert (val < 4), "Mux input value not recognized!"
+        if stream is not None:
+            assert (stream < self.n_streams), "Can't switch stream >= self.n_streams" 
+            reg = 'source_sel%d' % (stream // 16) # one register per 16 streams
+            reg_pos = 15 - (stream % 16) # First input controlled by MSBs
+            self.change_reg_bits(reg, val, 2*reg_pos, 2)
         else:
-            self.n_sample_bytes = np.dtype(dtype).itemsize
-            self._snapshot_samples_per_pol = self._REAL_SNAPSHOT_SAMPLES_PER_POL
-        self._n_sample_bits = 8* self.n_sample_bytes
-        self._n_ram_per_pol = self.n_streams * self._n_sample_bits // 128
-        self._n_stream_per_ram = self.n_streams // self._n_ram_per_pol
-        self._n_bytes_per_ram = self._snapshot_samples_per_pol * self.n_sample_bytes // self._n_ram_per_pol
+            for stream in range(self.n_streams):
+                self._switch(val, stream)
 
-    def _trigger_snapshot(self):
+    def use_noise(self, stream=None):
         """
-        Trigger a new ADC snapshot capture.
-        """
-        self.write_int('snapshot_arm', 0)
-        self.write_int('snapshot_trig', 0)
-        self.write_int('snapshot_arm', 1)
-        self.write_int('snapshot_arm', 0)
-        self.write_int('snapshot_trig', 1)
-        self.write_int('snapshot_trig', 0)
+        Switch input to internal noise source.
 
-    def _arm_snapshot(self):
-        """
-        Arm, but don't trigger, a snapshot capture
-        """
-        self.write_int('snapshot_arm', 0)
-        self.write_int('snapshot_trig', 0)
-        self.write_int('snapshot_arm', 1)
-        self.write_int('snapshot_arm', 0)
+        :param stream: Which stream to switch. If None, switch all.
+        :type stream: int or None
 
-    def _read_snapshot(self):
         """
-        Read snapshot brams and format appropriately.
+        self._debug("Stream %s: switching to Noise" % stream)
+        self._switch(self._USE_NOISE, stream)
+
+    def use_adc(self, stream=None):
         """
-        if self.is_complex:
-            d = np.zeros([self.n_signals, self._snapshot_samples_per_pol], dtype=complex)
-            for sig in range(self.n_signals):
-                for ram in range(self._n_ram_per_pol//2):
-                    for cn, complexity in enumerate(['real', 'imag']):
-                        ram_id = sig * self._n_ram_per_pol + 2*ram + cn
-                        ram_name = f'ss_{ram_id}_bram'
-                        dram = np.frombuffer(self.read(ram_name, self._n_bytes_per_ram), dtype=self.dtype)
-                        if complexity == 'imag':
-                            v = 1j*dram
-                        else:
-                            v = dram
-                        for i in range(2*self._n_stream_per_ram):
-                            d[sig, self._n_stream_per_ram*ram + i::self.n_streams] += v[i::2*self._n_stream_per_ram]
-        else:
-            d = np.zeros([self.n_signals, self._snapshot_samples_per_pol], dtype=int)
-            for sig in range(self.n_signals):
-                for ram in range(self._n_ram_per_pol):
-                    ram_id = sig * self._n_ram_per_pol + ram
-                    ram_name = f'ss_{ram_id}_bram'
-                    dram = np.frombuffer(self.read(ram_name, self._n_bytes_per_ram), dtype=self.dtype)
-                    for i in range(self._n_stream_per_ram):
-                        d[sig, self._n_stream_per_ram*ram + i::self.n_streams] = dram[i::self._n_stream_per_ram]
-        return d
+        Switch input to ADC.
+
+        :param stream: Which stream to switch. If None, switch all.
+        :type stream: int or None
+
+        """
+        self._debug("Stream %s: switching to ADC" % stream)
+        self._switch(self._USE_ADC, stream)
+
+    def use_zero(self, stream=None):
+        """
+        Switch input to zeros.
+
+        :param stream: Which stream to switch. If None, switch all.
+        :type stream: int or None
+
+        """
+        self._debug("Stream %s: switching to Zeros" % stream)
+        self._switch(self._USE_ZERO, stream)
+
+    def use_counter(self, stream=None):
+        """
+        Switch input to counter.
+
+        :param stream: Which stream to switch. If None, switch all.
+        :type stream: int or None
+
+        """
+        self._debug("Stream %s: switching to Counter" % stream)
+        self._switch(self._USE_COUNTER, stream)
+
+    def get_bit_stats(self):
+        """
+        Get the mean, RMS, and mean powers of all ADC streams.
+
+        :return: (means, powers, rmss) tuple. Each member of the tuple is an
+            array with ``self.n_streams`` elements.
+        :rval: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
+
+        """
+        self.write_int('rms_enable', 1)
+        time.sleep(0.01)
+        self.write_int('rms_enable', 0)
+        x = np.array(struct.unpack('>%dQ' % (self.n_streams), self.read('rms_levels', self.n_streams * 8)), dtype=np.uint64)
+        self.write_int('rms_enable', 1)
+        # Top 32 bits of data are signed means
+        # Lower 32 bits are unsigned powers
+        means    = (x >> 32).astype(np.int64)
+        means[means >= 2**31] -= 2**32
+        means    = means.astype(float) / 2.**16
+        powers   = (x & (2**32 - 1)) / 2.**16
+        rmss     = np.sqrt(powers)
+        return means, powers, rmss
 
     def get_snapshot(self, sw_trigger=True):
         """
@@ -109,12 +164,23 @@ class Input(Block):
             than starting capture on an external hardware pulse.
         :type sw_trigger: bool
 
-        :return: (signal0, signal1) tuple, each a numpy array of ADC samples
-        :rval: (numpy.ndarray, nump.ndarray)
+        :return: Array of shape [n_signals, n_samples] containing ADC samples
+        :rval: numpy.ndarray
         """
-        if sw_trigger:
-            self._trigger_snapshot()
-        return self._read_snapshot()
+        snapshot_name = self.prefix + 'snapshot'
+        if snapshot_name not in self.host.snapshots.keys():
+            self._warning("No snapshot available. Have you provided an fpg file?")
+            return
+        ss = self.host.snapshots[snapshot_name]
+        x, t = ss.read_raw(man_trig=sw_trigger)
+        if self.n_bits == 8:
+            d = np.frombuffer(x['data'], dtype='>i1')
+        elif self.n_bits == 16:
+            d = np.frombuffer(x['data'], dtype='>i2')
+        else:
+            self._error("Only 8 or 16 bits supported!")
+            raise RuntimeError
+        return d.reshape([self.n_streams, -1], order='F')
 
     def plot_snapshot(self, n_sample=-1, sw_trigger=True):
         """
@@ -128,30 +194,10 @@ class Input(Block):
         from matplotlib import pyplot as plt
         d = self.get_snapshot(sw_trigger=sw_trigger)
         nsig, nsample = d.shape
-        if self.is_complex:
-            for i in range(nsig):
-                plt.plot(d[i, 0:n_sample].real, label=f'signal_{i}_real')
-                plt.plot(d[i, 0:n_sample].imag, label=f'signal_{i}_imag')
-        else:
-            for i in range(nsig):
-                plt.plot(d[i, 0:n_sample], label=f'signal_{i}')
+        for i in range(nsig):
+            plt.plot(d[i, 0:n_sample], label=f'signal_{i}')
         plt.legend()
         plt.show()
-
-    def get_bit_stats(self):
-        """
-        Get the mean, RMS, and mean powers of all ADC streams.
-
-        :return: (means, powers, rmss) tuple. Each member of the tuple is an
-            array with ``self.n_streams`` elements.
-        :rval: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
-
-        """
-        d = self.get_snapshot()
-        means = d.mean(axis=1)
-        powers = (np.abs(d)**2).mean(axis=1)
-        rmss = np.sqrt(powers)
-        return means, powers, rmss
 
     def initialize(self, read_only=False):
         """
@@ -174,6 +220,10 @@ class Input(Block):
 
         Status keys:
 
+            - switch_position<n> (str) : Switch position ('noise', 'adc', 'zero' or 'counter')
+              for input stream ``n``, where ``n`` is a two-digit integer starting at 00.
+              Any input position other than 'adc' is flagged with "NOTIFY".
+
             - power<n> (float) : Mean power of input stream ``n``, where ``n`` is a
               two-digit integer starting at 00. In units of (ADC LSBs)**2.
 
@@ -194,8 +244,12 @@ class Input(Block):
         """
         stats = {}
         flags = {}
+        switch_positions = self.get_switch_positions()
         mean, power, rms = self.get_bit_stats()
-        for i in range(self.n_signals):
+        for i in range(self.n_streams):
+            stats['switch_position%.2d' % i] = switch_positions[i]
+            if switch_positions[i] != 'adc':
+                flags['switch_position%.2d' % i] = FENG_NOTIFY
             stats['power%.2d' % i] = power[i]
             stats['rms%.2d' % i]   = rms[i]
             stats['mean%.2d' % i]  = mean[i]
