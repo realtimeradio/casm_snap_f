@@ -182,12 +182,12 @@ class Fpga(Block):
               if outside the recommended operating conditions. Flagged as an
               error if outside the absolute maximum ratings. See DS892.
 
-
         :return: (status_dict, flags_dict) tuple. `status_dict` is a dictionary of
             status key-value pairs. flags_dict is
             a dictionary with all, or a sub-set, of the keys in `status_dict`. The values
             held in this dictionary are as defined in `error_levels.py` and indicate
             that values in the status dictionary are outside normal ranges.
+
         """
         stats = {}
         flags = {}

@@ -84,16 +84,6 @@ whether the FPGA is programmed with an CASM F-Engine firmware design.
   :no-show-inheritance:
   :members:
 
-Power Monitoring
-++++++++++++++++
-
-The ``PowerMon`` interface allows gathering of power supply statistics such
-as voltage and currnt levels.
-
-.. autoclass:: casm_f.blocks.powermon.PowerMon
-  :no-show-inheritance:
-  :members:
-
 Timing Control
 ++++++++++++++
 
@@ -145,14 +135,6 @@ PFB Control
 .. autoclass:: casm_f.blocks.pfb.Pfb
   :no-show-inheritance:
   :members:
-
-Flagging Control
-++++++++++++++++
-
-.. autoclass:: casm_f.blocks.mask.Mask
-  :no-show-inheritance:
-  :members:
-
 
 Auto-correlation Control
 ++++++++++++++++++++++++

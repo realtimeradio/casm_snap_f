@@ -186,9 +186,10 @@ The `packetizer` block inserts application packet headers in the channel down-se
 Each packet contains data from all 12 ADC channels, and any multiple of 8 frequency channels (though smaller packets incur more protocol overhead and the total data rate should be kept below 10 Gb/s).
 The maximum packet size is 8192 kB.
 Each packet contains a header describing
- - the timestamp of the sample in the packet
- - the channel index of the first channel in the packet
- - the ID of the SNAP board from which the packet is being sent
+
+  - the timestamp of the sample in the packet
+  - the channel index of the first channel in the packet
+  - the ID of the SNAP board from which the packet is being sent
 
 10 GbE Transmission (`eth`)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
