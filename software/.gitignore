@@ -1,2 +1,4 @@
 src/__version__.py
 build/
+*egg-info/
+dist/
