@@ -5,6 +5,18 @@ from .block import Block
 from ..error_levels import *
 
 class Sync(Block):
+    """
+    A control interface for a board's timekeeping logic.
+
+    :param use_loopback: If True, loop the TT synchronization back into
+        the internal timekeeping logic. This is appropriate when the
+        synchronization comes from an external PPS, and not from an upstream
+        TT counter which is divided down by 2^N.
+    :type use_loopback: bool
+
+    :param fs_hz: FPGA clock rate, in Hz.
+    :type fs_hz: int
+    """
     OFFSET_ACTIVE_HIGH = 0
     OFFSET_RST_TT_INT = 1
     OFFSET_MAN_LOAD_INT = 2
@@ -18,8 +30,11 @@ class Sync(Block):
     OFFSET_TT_LOAD_ARM = 10
     OFFSET_LOOPBACK_EN = 11
 
-    def __init__(self, host, name, logger=None):
+    def __init__(self, host, name, use_loopback=False, fs_hz=200000000, logger=None):
         super(Sync, self).__init__(host, name, logger)
+        self.use_loopback = use_loopback
+        self.fs_hz = fs_hz
+        self.fs_hz = fs_hz
     
     def uptime(self):
         """
@@ -212,7 +227,7 @@ class Sync(Block):
         """
         self.write_int('tt_mask', mask)
 
-    def update_telescope_time(self, fs_hz=196000000):
+    def update_telescope_time(self):
         """
         Load the PPS-locked telescope time counters with the correct time
         on the next PPS pulse.
@@ -229,10 +244,6 @@ class Sync(Block):
           5. Verify (using ``count_pps``) that no PPS pulses have occurred while
              performing steps 2 and 3. Generate an error if this is not the case.
 
-        :param fs_hz: The ADC clock rate, in Hz. Used to set the
-            telescope time counter.
-        :type fs_hz: int
-
         """
         x = self.wait_for_pps()
         first_pps = time.time()
@@ -247,7 +258,7 @@ class Sync(Block):
             self._warning("System time and GPS time seem to differ by %d ms" % ntp_gps_delta_ms)
         next_pps = round(first_pps) + 1
         self._info("Loading new telescope time at %s" % time.ctime(next_pps))
-        target_tt = int(next_pps * fs_hz)
+        target_tt = int(next_pps * self.fs_hz)
         self.load_telescope_time(target_tt, software_load=False)
         loaded_time = time.time()
         spare = first_pps + 1 - loaded_time
@@ -367,7 +378,7 @@ class Sync(Block):
             raise RuntimeError
         return tt, sync_number
 
-    def update_internal_time(self, fs_hz=196000000, quiet=False):
+    def update_internal_time(self, quiet=False):
         """
         Load the sync-pulse-locked telescope time counters with the correct time
         on the next sync pulse.
@@ -389,10 +400,6 @@ class Sync(Block):
           5. Verify (using ``count_ext``) that no sync pulses have occurred while
              performing steps 2 and 3. Generate an error if this is not the case.
 
-        :param fs_hz: The ADC clock rate, in Hz. Used to set the
-            telescope time counter.
-        :type fs_hz: int
-
         :param quiet: If True, supress log messages
         :type quiet: bool
 
@@ -401,24 +408,24 @@ class Sync(Block):
         if not quiet: self._info("Detected sync period %.1f (2^%.1f) clocks" % (sync_period, log2(sync_period)))
         #if ((log2(sync_period) % 1) != 0):
         #    self._warning("Odd sync period detected")
-        #if sync_period < fs_hz:
+        #if sync_period < self.fs_hz:
         #    self._warning("Might have issues synchronizing with a sync period < 1 second")
         curr_tt_load_msb = self.read_uint('int_tt_load_msb')
         # We assume that the master TT is tracking clocks since unix epoch.
         # Syncs should come every `sync_period` ADC clocks
         count_start = self.wait_for_sync()
         first_sync = time.time() 
-        first_sync_clocks = int(first_sync * fs_hz)
+        first_sync_clocks = int(first_sync * self.fs_hz)
         first_sync_exact = (first_sync_clocks / sync_period) # pulse ID since time origin
         next_sync_clocks = (round(first_sync_exact) + 1) * sync_period
-        ntp_sync_delta_ms =  (first_sync_exact - round(first_sync_exact)) * sync_period / fs_hz * 1000
+        ntp_sync_delta_ms =  (first_sync_exact - round(first_sync_exact)) * sync_period / self.fs_hz * 1000
         if abs(ntp_sync_delta_ms) > 100:
             self._warning("System time and Sync time seem to differ by %d ms" % ntp_sync_delta_ms)
-        next_sync = next_sync_clocks / fs_hz
+        next_sync = next_sync_clocks / self.fs_hz
         if not quiet: self._info("Loading new telescope time at %s" % time.ctime(next_sync))
         self.load_internal_time(next_sync_clocks, software_load=False, current_msb=curr_tt_load_msb)
         loaded_time = time.time()
-        spare = first_sync + (sync_period / fs_hz) - loaded_time
+        spare = first_sync + (sync_period / self.fs_hz) - loaded_time
         if not quiet and spare < 0.001:
             self._warning("Internal TT loaded with only %.2f seconds to spare" % spare)
         if not quiet and spare < 0:
@@ -491,8 +498,8 @@ class Sync(Block):
         """
         Initialize block.
 
-        :param read_only: If False, initialize system control register to 0
-            and reset error counters. If True, do nothing.
+        :param read_only: If False, initialize system control register to 0,
+            reset error counters and configure loopback. If True, do nothing.
         :type read_only: bool
 
         """
@@ -502,4 +509,8 @@ class Sync(Block):
             self.write_int('ctrl', 0)
             # Set output pulse rate to 1 per 2**29 clocks (every ~2.7 seconds)
             self.set_output_sync_rate(0xe0000000)
+            if self.use_loopback:
+                self.enable_loopback()
+            else:
+                self.disable_loopback()
             self.reset_error_count()

@@ -17,17 +17,23 @@ class EqTvg(Block):
     :param logger: Logger instance to which log messages should be emitted.
     :type logger: logging.Logger
 
-    :param n_streams: Number of independent streams which may be delayed
+    :param n_streams: Number of independent streams.
     :type n_streams: int
+
+    :param n_parallel_streams: Number of independent streams processed in parallel.
+    :type n_parallel_streams: int
 
     :param n_chans: Number of frequency channels.
     :type n_chans: int
 
     """
     _FORMAT = 'B'
-    def __init__(self, host, name, n_streams=64, n_chans=2**12, logger=None):
+    def __init__(self, host, name, n_streams=64, n_parallel_streams=64, n_chans=2**12, logger=None):
         super(EqTvg, self).__init__(host, name, logger)
         self.n_streams = n_streams
+        self.n_parallel_streams = n_parallel_streams
+        assert n_streams % n_parallel_streams == 0
+        self.n_serial_streams = n_streams // n_parallel_streams
         self.n_chans = n_chans
         self._stream_size = struct.calcsize(self._FORMAT)*self.n_chans
 
@@ -52,6 +58,24 @@ class EqTvg(Block):
 
         """
         return bool(self.read_int('tvg_en'))
+
+    def _get_ramname_offset(self, stream):
+        """
+        Get the BRAM name and byte offset corresponding to a particular
+        stream's test vectors.
+
+        :param stream: Stream index
+        :type stream: int
+
+        :return: bram_name, bram_byte_offset
+        """
+        if not stream < self.n_streams:
+            self.error(f"stream {stream} is larger than allowed!")
+            raise ValueError
+        bram_offset = (stream % self.n_serial_streams) * self._stream_size
+        bram_index = stream // self.n_serial_streams
+        bram_name = f"tv{bram_index}"
+        return bram_name, bram_offset
     
     def write_stream_tvg(self, stream, test_vector):
         """
@@ -71,9 +95,8 @@ class EqTvg(Block):
         """
         tv = np.array(test_vector, dtype='>%s'%self._FORMAT)
         assert (tv.shape[0] == self.n_chans), "Test vector should have self.n_chans elements!"
-        core_name = 'core%d_tv' % (stream // 16)
-        sub_index = stream % 16
-        self.write(core_name, tv.tostring(), offset=sub_index*self._stream_size)
+        bram_name, bram_offset = self._get_ramname_offset(stream)
+        self.write(bram_name, tv.tostring(), offset=bram_offset)
 
     def write_const_per_stream(self):
         """
@@ -110,9 +133,9 @@ class EqTvg(Block):
         :rtype: numpy.ndarray
 
         """
-        core_name = 'core%d_tv' % (stream // 16)
-        sub_index = stream % 16
-        s = self.read(core_name, self._stream_size, offset=sub_index*self._stream_size)
+        bram_name, bram_offset = self._get_ramname_offset(stream)
+        self.write(bram_name, tv.tostring(), offset=bram_offset)
+        s = self.read(bram_name, self._stream_size, offset=bram_offset)
         tvg = np.fromstring(s, dtype='>%s' %self._FORMAT)
 
         if makecomplex:

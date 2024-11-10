@@ -42,6 +42,7 @@ class Adc(Block):
                 raise RuntimeError
             self._info("Training ADC link")
             err = self.adc.init(sample_rate=self.sample_rate_mhz, numChannel=4, verify=True)
-            self._info(f"Link training returned {err}")
-            if err != self.adc.SUCCESS:
+            if err == self.adc.SUCCESS:
+                self._info("Link training completed successfully")
+            else:
                 raise RuntimeError(f"ADC initialization failed with code {err}")

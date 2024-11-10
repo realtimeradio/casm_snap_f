@@ -63,9 +63,26 @@ class Eq(Block):
         coeffs = list(coeffs)
         assert len(coeffs) == self.n_coeffs, "Length of provided coefficient vector should be %d" % self.n_coeffs
         coeffs_str = struct.pack('>%d%s' % (len(coeffs), self._FORMAT), *coeffs)
-        coeff_reg = 'core_coeffs%d' % (inputid // self.n_serial_inputs)
-        serial_index = inputid % self.n_serial_inputs
-        self.write(coeff_reg, coeffs_str, offset=self._stream_size * serial_index)
+        coeff_reg, reg_offset = self._get_ramname_offset(inputid)
+        self.write(coeff_reg, coeffs_str, offset=reg_offset)
+
+    def _get_ramname_offset(self, inputid):
+        """
+        Get the BRAM name and byte offset corresponding to a particular
+        intput's test vectors.
+
+        :param inputid: Input index
+        :type inputid: int
+
+        :return: bram_name, bram_byte_offset
+        """
+        if not inputid < self.n_inputs:
+            self.error(f"input index {inputid} is larger than allowed!")
+            raise ValueError
+        bram_offset = (inputid % self.n_serial_inputs) * self._stream_size
+        bram_index = inputid // self.n_serial_inputs
+        bram_name = f"core_coeffs{bram_index}"
+        return bram_name, bram_offset
 
     def plot_all_coefficients(self, db=False):
         """
@@ -111,9 +128,8 @@ class Eq(Block):
         :rtype: (numpy.ndarray, int) or numpy.ndarray
 
         """
-        coeff_reg = 'core_coeffs%d' % (inputid // self.n_serial_inputs)
-        serial_index = inputid % self.n_serial_inputs
-        coeffs_str = self.read(coeff_reg, self._stream_size, offset= self._stream_size * serial_index)
+        coeff_reg, reg_offset = self._get_ramname_offset(inputid)
+        coeffs_str = self.read(coeff_reg, self._stream_size, offset=reg_offset)
         coeffs = np.array(struct.unpack('>%d%s' % (self.n_coeffs, self._FORMAT), coeffs_str))
         if return_as_int:
             return coeffs, self._BP

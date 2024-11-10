@@ -1,6 +1,8 @@
 from .block import Block
 from ..error_levels import *
 
+REGISTER_WIDTH = 32
+
 class Delay(Block):
     """
     Instantiate a control interface for a Delay block.
@@ -18,11 +20,13 @@ class Delay(Block):
     :type n_streams: int
 
     """
-    MIN_DELAY = 0 #: minimum delay allowed
+    MIN_DELAY = 1 #: minimum delay allowed
+    _DELAY_BITS = 8 #: Number of bits per delay control signal in firmware
     def __init__(self, host, name, n_streams=64, logger=None):
         super(Delay, self).__init__(host, name, logger)
         self.n_streams = n_streams
         self.max_delay = None
+        self._n_stream_per_reg = REGISTER_WIDTH // self._DELAY_BITS
 
     def get_max_delay(self):
         """
@@ -42,6 +46,24 @@ class Delay(Block):
         else:
             self.max_delay = max_delay
         return self.max_delay
+
+    def _get_regname_offset(self, stream):
+        """
+        Get the register name and bit offset for a
+        particular stream number.
+
+        :param stream: ADC stream index
+        :type stream: int
+
+        :return: (control_register_name, bit_offset)
+        """
+        # Figure out which control register
+        control_id = stream // self._n_stream_per_reg
+        delay_reg  = 'delays%d' % (control_id)
+        # Figure out offset within this register
+        # Offset is from MSBs
+        reg_offset = REGISTER_WIDTH - (self._DELAY_BITS*(1+(stream % self._n_stream_per_reg)))
+        return delay_reg, reg_offset
 
     def set_delay(self, stream, delay):
         """
@@ -64,13 +86,8 @@ class Delay(Block):
             self._error('Tried to set delay to %d which is > the allowed maximum (%d)' % (delay, self.max_delay))
             delay = self.max_delay-1
         self._debug('Setting delay of stream %d to %d' % (stream, delay))
-        control_id = stream // 32
-        enable_reg = 'delay_en%d' % (control_id)
-        delay_reg  = 'delay%d' % (control_id)
-        self.write_int(enable_reg, 0)
-        self.write_int(delay_reg, delay)
-        self.write_int(enable_reg, 1 << (31 - (stream % 32))) # MSB is channel 0
-        self.write_int(enable_reg, 0)
+        delay_reg, reg_offset = self._get_regname_offset(stream)
+        self.change_reg_bits(delay_reg, delay, reg_offset, width=self._DELAY_BITS)
 
     def get_delay(self, stream):
         """
@@ -85,10 +102,8 @@ class Delay(Block):
         """
         if stream > self.n_streams:
             self._error('Tried to get delay for stream %d > n_streams (%d)' % (stream, self.n_streams))
-        control_id = stream//32
-        block = 'delay_store%d' % control_id
-        self.write_int('%s_sel' % block, stream % 32)
-        return self.read_uint('%s_readout' % block)
+        delay_reg, reg_offset = self._get_regname_offset(stream)
+        return self.get_reg_bits(delay_reg, reg_offset, width=self._DELAY_BITS)
 
     def initialize(self, read_only=False):
         """

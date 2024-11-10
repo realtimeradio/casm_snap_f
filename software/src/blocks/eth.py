@@ -16,7 +16,7 @@ class Eth(Block):
     :param logger: Logger instance to which log messages should be emitted.
     :type logger: logging.Logger
     """
-    _CORE_NAME = 'forty_gbe' #: 40G core name in simulink
+    _CORE_NAME = 'ten_gbe' #: 10G core name in simulink
     def __init__(self, host, name, logger=None):
         super(Eth, self).__init__(host, name, logger)
         self._get_eth_core()

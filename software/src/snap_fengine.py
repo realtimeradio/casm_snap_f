@@ -28,13 +28,13 @@ from .blocks import eth
 from .blocks import corr
 
 PIPELINES_PER_XENG = 4
-FS_MHZ = 250. # ADC sample rate in MHz
 
 N_INPUTS = 12  # ADC inputs per SNAP
 N_CHANS  = 2**12 # Frequency channels per input
 FENG_SOURCE_PORT = 10000 # UDP source port for data transmission
 MAC_BASE = 0x020203030400 # MAC base address for 10GbE interface
 IP_BASE = (10 << 24) + (41 << 16) + (0 << 8) + 100 # IP base address for 10GbE interface
+DEFAULT_SAMPLE_RATE_HZ = 250000000
 
 class SnapFengine():
     """
@@ -46,24 +46,36 @@ class SnapFengine():
     :param logger: Logger instance to which log messages should be emitted.
     :type logger: logging.Logger
 
-    :param fpgfile: If provided, scrape information from the fpgfile.
+    :param fpgfile: If provided, scrape information from the fpgfile. If not provided,
+        attempt to ask the board for information about what firmware it is running.
+    :type fpgfile: str
+
+    :param fs_hz: ADC sample rate, in Hz.
+    :typoe fs_hz: int
 
     """
-    def __init__(self, host, logger=None, fpgfile=None):
+    def __init__(self, host, logger=None, fpgfile=None, fs_hz=DEFAULT_SAMPLE_RATE_HZ):
         self.hostname = host #: hostname of the F-Engine's host board
         #: Python Logger instance
         self.logger = logger or helpers.add_default_log_handlers(logging.getLogger(__name__ + ":%s" % (host)))
+        #: F-engine sample rate, in Hz
+        self.fs_hz = fs_hz
         #: Underlying CasperFpga control instance
         self._cfpga = casperfpga.CasperFpga(
                         host=self.hostname,
                         transport=casperfpga.KatcpTransport,
                     )
-        if fpgfile is not None:
-            try:
-                self._cfpga.get_system_information(fpgfile)
-            except:
+        self.blocks = {}
+        try:
+            self._cfpga.get_system_information(fpgfile)
+        except:
+            if fpgfile is None:
+                if not self._cfpga.is_running():
+                    self.logger.info("Failed to get running firmware information from board because it is not programmed.")
+                else:
+                    self.logger.error("Failed to get running firmware information from board even though it is programmed.")
+            else:
                 self.logger.error(f"Failed to read and decode {fpgfile}")
-            self.blocks = {}
         try:
             self._initialize_blocks()
         except:
@@ -77,22 +89,18 @@ class SnapFengine():
         """
         return self._cfpga.is_connected()
 
-    def _initialize_blocks(self, passive=False):
+    def _initialize_blocks(self):
         """
         Initialize firmware blocks, populating the ``blocks`` attribute.
-
-        :param passive: If True, don't attempt to do anything to interact with the FPGAs
-            when creating their block control instances.
-        :type passive: bool
         """
 
         # blocks
         #: Control interface to high-level FPGA functionality
         self.fpga        = fpga.Fpga(self._cfpga, "")
         #: Control interface to ADC block
-        self.adc         = adc.Adc(self._cfpga, 'adc', sample_rate_mhz=FS_MHZ)
+        self.adc         = adc.Adc(self._cfpga, 'adc', sample_rate_mhz=self.fs_hz / 1.e6)
         #: Control interface to Synchronization / Timing block
-        self.sync        = sync.Sync(self._cfpga, 'sync')
+        self.sync        = sync.Sync(self._cfpga, 'sync', use_loopback=True, fs_hz=self.fs_hz)
         #: Control interface to Noise Generation block
         self.noise       = noisegen.NoiseGen(self._cfpga, 'noise', n_noise=2, n_outputs=N_INPUTS)
         #: Control interface to Input Multiplex block
@@ -112,15 +120,15 @@ class SnapFengine():
         #: Control interface to Equalization block
         self.eq          = eq.Eq(self._cfpga, 'eq', n_inputs=N_INPUTS, n_parallel_inputs=N_INPUTS//2, n_coeffs=N_CHANS//8)
         #: Control interface to post-equalization Test Vector Generator block
-        self.eqtvg       = eqtvg.EqTvg(self._cfpga, 'eqtvg', n_streams=N_INPUTS, n_chans=N_CHANS)
+        self.eqtvg       = eqtvg.EqTvg(self._cfpga, 'eqtvg', n_streams=N_INPUTS, n_parallel_streams=N_INPUTS//2, n_chans=N_CHANS)
         #: Control interface to Channel Reorder block
         self.reorder     = chanreorder.ChanReorder(self._cfpga, 'chan_reorder', n_chans=N_CHANS)
         #: Control interface to Packetizer block
-        self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=FS_MHZ)
+        self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=self.fs_hz / 1.e6)
         #: Control interface to 10GbE interface block
         self.eth         = eth.Eth(self._cfpga, 'eth')
         #: Control interface to Correlation block
-        self.corr        = corr.Corr(self._cfpga,'corr', n_chans=N_CHANS)
+        self.corr        = corr.Corr(self._cfpga,'corr_0', n_chans=N_CHANS, n_signals=N_INPUTS)
 
         # The order here can be important, blocks are initialized in the
         # order they appear here
@@ -142,26 +150,25 @@ class SnapFengine():
             'autocorr'  : self.autocorr,
             'corr'      : self.corr,
         }
+        for blockname, block in self.blocks.items():
+            block.initialize(read_only=True)
 
-    def initialize(self, read_only=True):
+
+    def initialize(self):
         """
-        Call the ```initialize`` methods of all underlying blocks, then
-        optionally issue a software global reset.
+        Call the ```initialize`` methods of all underlying blocks (apart from
+        the ADC block, which is initialized during programming), then
+        issue a software global reset.
 
-        :param read_only: If True, call the underlying initialization methods
-            in a read_only manner, and skip software reset.
-        :type read_only: bool
         """
         for blockname, block in self.blocks.items():
-            if read_only:
-                self.logger.info("Initializing block (read only): %s" % blockname)
-            else:
-                self.logger.info("Initializing block (writable): %s" % blockname)
-            block.initialize(read_only=read_only)
-        if not read_only:
-            self.logger.info("Performing software global reset")
-            self.sync.arm_sync()
-            self.sync.sw_sync()
+            if blockname == "adc":
+                continue
+            self.logger.info(f"Initializing block {blockname}")
+            block.initialize()
+        self.logger.info("Performing software global reset")
+        self.sync.arm_sync()
+        self.sync.sw_sync()
 
     def get_status_all(self):
         """
@@ -264,14 +271,18 @@ class SnapFengine():
                 new_eq[stop_chan:] = 0
                 self.eq.set_coeffs(stream_id, new_eq[::coeff_repeat_factor])
 
-    def program(self, fpgfile):
+    def program(self, fpgfile=None, initialize_adc=True):
         """
         Program an .fpg file to an FPGA. 
 
         :param fpgfile: The .fpg file to be loaded. Should be a path to a
-            valid .fpg file. If None is given, the image currently in flash
-            will be loaded.
+            valid .fpg file. If None is given, the image currently loaded
+            will be rebooted.
         :type fpgfile: str
+
+        :param initialize_adc: If True, perform ADC link training. Otherwise skip.
+            You _must_ perform link training before expecting ADC output to be meaningful.
+        :type initialize_adc: bool
 
         """
 
@@ -286,3 +297,5 @@ class SnapFengine():
             raise RuntimeError("Path %s doesn't exist" % fpgfile)
 
         self._cfpga.upload_to_ram_and_program(fpgfile)
+        if initialize_adc:
+            self.adc.initialize()
