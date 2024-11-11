@@ -102,7 +102,7 @@ class SnapFengine():
         #: Control interface to Noise Generation block
         self.noise       = noisegen.NoiseGen(self._cfpga, 'noise', n_noise=2, n_outputs=N_INPUTS)
         #: Control interface to Input Multiplex block
-        self.input       = input.Input(self._cfpga, 'input', n_streams=16, n_bits=8)
+        self.input       = input.Input(self._cfpga, 'input', n_streams=16, n_real_streams=N_INPUTS, n_bits=8)
         #: Control interface to Coarse Delay block
         self.delay       = delay.Delay(self._cfpga, 'delay', n_streams=N_INPUTS)
         #: Control interface to PFB block

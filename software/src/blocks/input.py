@@ -25,11 +25,16 @@ class Input(Block):
     :param n_streams: Number of independent streams which may be delayed
     :type n_streams: int
 
+    :param n_real_streams: If provided, sets the number of valid streams,
+        allowing some to be ignored for plotting / reporting
+    :type n_real_streams: int
+
     :param n_bits: Number of bits per ADC sample.
     :type n_bits: int
 
     :ivar n_streams: Number of streams this interface handles
     :ivar n_bits: Number of bits per ADC sample
+
     """
     _USE_NOISE = 0
     _USE_ADC   = 1
@@ -42,10 +47,14 @@ class Input(Block):
     _INT_TO_POS[_USE_COUNTER] = 'counter'
     _SNAPSHOT_SAMPLES_PER_POL = 1024
 
-    def __init__(self, host, name, n_streams=64, n_bits=10, logger=None):
+    def __init__(self, host, name, n_streams=64, n_real_streams=None, n_bits=10, logger=None):
         super(Input, self).__init__(host, name, logger)
         self.n_streams = n_streams
         self.n_bits = n_bits
+        if n_real_streams is None:
+            self.n_real_streams = self.n_streams
+        else:
+            self.n_real_streams = n_real_streams
 
     def get_switch_positions(self):
         """
@@ -59,7 +68,7 @@ class Input(Block):
 
         """
         pos = []
-        for regn in range(self.n_streams // 16):
+        for regn in range(self.n_real_streams // 16):
             reg_val = self.read_uint('source_sel%d' % regn)
             for i in range(16):
                 # MSBs of control signals are for first input
@@ -145,7 +154,7 @@ class Input(Block):
         self.write_int('rms_enable', 1)
         time.sleep(0.01)
         self.write_int('rms_enable', 0)
-        x = np.array(struct.unpack('>%dQ' % (self.n_streams), self.read('rms_levels', self.n_streams * 8)), dtype=np.uint64)
+        x = np.array(struct.unpack('>%dQ' % (self.n_streams), self.read('rms_levels', self.n_real_streams * 8)), dtype=np.uint64)
         self.write_int('rms_enable', 1)
         # Top 32 bits of data are signed means
         # Lower 32 bits are unsigned powers
@@ -180,7 +189,7 @@ class Input(Block):
         else:
             self._error("Only 8 or 16 bits supported!")
             raise RuntimeError
-        return d.reshape([self.n_streams, -1], order='F')
+        return d.reshape([self.n_streams, -1], order='F')[0:self.n_real_streams]
 
     def plot_snapshot(self, n_sample=-1, sw_trigger=True):
         """
@@ -246,7 +255,7 @@ class Input(Block):
         flags = {}
         switch_positions = self.get_switch_positions()
         mean, power, rms = self.get_bit_stats()
-        for i in range(self.n_streams):
+        for i in range(self.n_real_streams):
             stats['switch_position%.2d' % i] = switch_positions[i]
             if switch_positions[i] != 'adc':
                 flags['switch_position%.2d' % i] = FENG_NOTIFY
@@ -311,7 +320,7 @@ class Input(Block):
             data.
         """
         out = np.zeros([self.n_streams, 2**self.n_bits])
-        for stream in range(self.n_streams):
+        for stream in range(self.n_real_streams):
             x, out[stream,:] = self.get_histogram(stream, sum_cores=True)
         return x, out.tolist()
 
