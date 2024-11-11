@@ -306,7 +306,7 @@ class Sync(Block):
             self.change_reg_bits('ctrl', 1, self.OFFSET_MAN_PPS)
             self.change_reg_bits('ctrl', 0, self.OFFSET_MAN_PPS)
 
-    def load_internal_time(self, tt, software_load=False, current_msb=None):
+    def load_internal_time(self, tt, software_load=False):
         """
         Load a new starting value into the _internal_ telescope time counter on the
         next sync.
@@ -423,7 +423,7 @@ class Sync(Block):
             self._warning("System time and Sync time seem to differ by %d ms" % ntp_sync_delta_ms)
         next_sync = next_sync_clocks / self.fs_hz
         if not quiet: self._info("Loading new telescope time at %s" % time.ctime(next_sync))
-        self.load_internal_time(next_sync_clocks, software_load=False, current_msb=curr_tt_load_msb)
+        self.load_internal_time(next_sync_clocks, software_load=False)
         loaded_time = time.time()
         spare = first_sync + (sync_period / self.fs_hz) - loaded_time
         if not quiet and spare < 0.001:
