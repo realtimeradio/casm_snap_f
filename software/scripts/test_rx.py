@@ -25,7 +25,7 @@ while(True):
         p = sock.recv(RECV_BYTES)
         t, c, f, nc, npl, data = decode_packet(p)
         ctime = time.ctime(NFFT * t / FS)
-        print(f'TIME {t} ({ctime}), CHAN {c}; FID {f}; NC {nc}; NP {npl}; data0,1,2,3 {data[0:4]}')
+        print(f'TIME {t} ({ctime}), CHAN {c}; FID {f}; NC {nc}; NP {npl}; data[0:24] {data[0:24]}')
         pcnt += 1
     except KeyboardInterrupt:
         break

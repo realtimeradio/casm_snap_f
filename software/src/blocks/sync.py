@@ -185,11 +185,17 @@ class Sync(Block):
             time.sleep(0.0001)
         return c1
 
-    def arm_sync(self):
+    def arm_sync(self, wait_for_sync=True):
         """
         Arm sync pulse generator, which passes sync pulses to the
         design DSP.
+
+        :param wait_for_sync: If True, wait for a sync to pass before
+            issuing arm command.
+        :type wait_for_sync: bool
         """
+        if wait_for_sync:
+            self.wait_for_sync()
         self.change_reg_bits('ctrl', 0, self.OFFSET_ARM_SYNC_OUT)
         self.change_reg_bits('ctrl', 1, self.OFFSET_ARM_SYNC_OUT)
         self.change_reg_bits('ctrl', 0, self.OFFSET_ARM_SYNC_OUT)

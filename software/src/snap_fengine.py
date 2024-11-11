@@ -489,7 +489,6 @@ class SnapFengine():
 
         self.initialize()
         self.eth.reset() # Includes disable
-        self.eth.status_reset()
 
         if fft_shift is not None:
             self.pfb.set_fftshift(fft_shift)
@@ -514,9 +513,14 @@ class SnapFengine():
 
         self.update_timekeeping()
 
-        self.sync.arm_sync()
+        self.sync.arm_sync(wait_for_sync=True)
         if sw_sync:
             self.sync.sw_sync()
+        else:
+            self.sync.wait_for_sync()
 
+        # Only enable TX when the pipeline has been
+        # Synchronized and is up and running
+        self.eth.status_reset()
         if enable_tx:
             self.eth.enable_tx()
