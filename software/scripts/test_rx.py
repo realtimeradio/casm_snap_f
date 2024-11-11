@@ -7,6 +7,8 @@ import numpy as np
 
 HEADER_LEN = 16
 RECV_BYTES = 8192 + HEADER_LEN
+FS = 250e6 # Sample rate in Hz
+NFFT = 8192 # FFT size (=2 x number of channels)
 
 def decode_packet(p):
     t, c, f, nc, npl = struct.unpack('>QHHHH', p[0:HEADER_LEN])
@@ -22,7 +24,8 @@ while(True):
     try:
         p = sock.recv(RECV_BYTES)
         t, c, f, nc, npl, data = decode_packet(p)
-        print(f'TIME {t}, CHAN {c}; FID {f}; NC {nc}; NP {npl}; data0,1,2,3 {data[0:4]}')
+        ctime = time.ctime(NFFT * t / FS)
+        print(f'TIME {t} ({ctime}), CHAN {c}; FID {f}; NC {nc}; NP {npl}; data0,1,2,3 {data[0:4]}')
         pcnt += 1
     except KeyboardInterrupt:
         break

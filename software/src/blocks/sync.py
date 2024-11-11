@@ -319,11 +319,11 @@ class Sync(Block):
         :type software_load: bool
         """
         assert tt < 2**64 - 1
-        msb = tt >> 32
-        lsb = tt & 0xffffffff
-        if current_msb != msb:
-            self.write_int('int_tt_load_msb', msb)
-        self.write_int('int_tt_load_lsb', lsb) # This triggers load
+        self.write_int('int_tt_load_msb', tt >> 32)
+        self.write_int('int_tt_load_lsb', tt & 0xffffffff)
+        self.change_reg_bits('ctrl', 0, self.OFFSET_TT_INT_LOAD_ARM)
+        self.change_reg_bits('ctrl', 1, self.OFFSET_TT_INT_LOAD_ARM)
+        self.change_reg_bits('ctrl', 0, self.OFFSET_TT_INT_LOAD_ARM)
         if software_load:
             self.change_reg_bits('ctrl', 0, self.OFFSET_MAN_LOAD_INT)
             self.change_reg_bits('ctrl', 1, self.OFFSET_MAN_LOAD_INT)
@@ -406,10 +406,10 @@ class Sync(Block):
         """
         sync_period = self.period()
         if not quiet: self._info("Detected sync period %.1f (2^%.1f) clocks" % (sync_period, log2(sync_period)))
-        #if ((log2(sync_period) % 1) != 0):
-        #    self._warning("Odd sync period detected")
-        #if sync_period < self.fs_hz:
-        #    self._warning("Might have issues synchronizing with a sync period < 1 second")
+        if ((log2(sync_period) % 1) != 0):
+            self._warning("Odd sync period detected")
+        if sync_period < self.fs_hz:
+            self._warning("Might have issues synchronizing with a sync period < 1 second")
         curr_tt_load_msb = self.read_uint('int_tt_load_msb')
         # We assume that the master TT is tracking clocks since unix epoch.
         # Syncs should come every `sync_period` ADC clocks
