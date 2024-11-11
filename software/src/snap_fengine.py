@@ -123,7 +123,7 @@ class SnapFengine():
         self.reorder     = chanreorder.ChanReorder(self._cfpga, 'chan_reorder', n_chans=N_CHANS)
         #: Control interface to Packetizer block
         self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=self.fs_hz / 1.e6,
-                n_signals=16, n_signals_real=N_INPUTS, n_chans=N_CHANS)
+                n_signals=16, n_signals_real=N_INPUTS, n_chans=N_CHANS, n_words_per_block=4)
         #: Control interface to 10GbE interface block
         self.eth         = eth.Eth(self._cfpga, 'eth')
         #: Control interface to Correlation block
