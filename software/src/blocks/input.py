@@ -68,13 +68,13 @@ class Input(Block):
 
         """
         pos = []
-        for regn in range(self.n_real_streams // 16):
+        for regn in range(self.n_streams // 16):
             reg_val = self.read_uint('source_sel%d' % regn)
             for i in range(16):
                 # MSBs of control signals are for first input
                 v = (reg_val >> (2*(15-i))) & 0b11
                 pos += [self._INT_TO_POS[v]]
-        return pos
+        return pos[0:self.n_real_streams]
                 
 
     def _switch(self, val, stream=None):
@@ -154,7 +154,7 @@ class Input(Block):
         self.write_int('rms_enable', 1)
         time.sleep(0.01)
         self.write_int('rms_enable', 0)
-        x = np.array(struct.unpack('>%dQ' % (self.n_streams), self.read('rms_levels', self.n_real_streams * 8)), dtype=np.uint64)
+        x = np.array(struct.unpack('>%dQ' % (self.n_real_streams), self.read('rms_levels', self.n_real_streams * 8)), dtype=np.uint64)
         self.write_int('rms_enable', 1)
         # Top 32 bits of data are signed means
         # Lower 32 bits are unsigned powers
