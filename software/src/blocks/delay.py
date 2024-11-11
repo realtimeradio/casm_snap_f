@@ -109,12 +109,14 @@ class Delay(Block):
         """
         Initialize all delays.
 
-        :param read_only: If True, do nothing. If False, initialize all
+        :param read_only: If True, do nothing except try to read
+        maximum allowed delay. If False, initialize all
             delays to the minimum allowed value.
         :type read_only: bool
 
         """
-        self.max_delay = self.get_max_delay()
+        if self._is_programmed():
+            self.max_delay = self.get_max_delay()
         if not read_only:
             for i in range(self.n_streams):
                 self.set_delay(i, self.MIN_DELAY)

@@ -66,16 +66,14 @@ class SnapFengine():
                         transport=casperfpga.KatcpTransport,
                     )
         self.blocks = {}
-        try:
-            self._cfpga.get_system_information(fpgfile)
-        except:
-            if fpgfile is None:
-                if not self._cfpga.is_running():
-                    self.logger.info("Failed to get running firmware information from board because it is not programmed.")
-                else:
+        if fpgfile is not None or self._cfpga.is_running():
+            try:
+                self._cfpga.get_system_information(fpgfile)
+            except:
+                if fpgfile is not None:
+                    self.logger.error(f"Failed to read and decode {fpgfile}")
+                elif self._cfpga.is_running():
                     self.logger.error("Failed to get running firmware information from board even though it is programmed.")
-            else:
-                self.logger.error(f"Failed to read and decode {fpgfile}")
         try:
             self._initialize_blocks()
         except:
@@ -297,5 +295,6 @@ class SnapFengine():
             raise RuntimeError("Path %s doesn't exist" % fpgfile)
 
         self._cfpga.upload_to_ram_and_program(fpgfile)
+        self._initialize_blocks()
         if initialize_adc:
             self.adc.initialize()

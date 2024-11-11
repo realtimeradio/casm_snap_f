@@ -351,6 +351,7 @@ class AutoCorr(Block):
         :type read_only: bool
         """
         if read_only:
-            self.get_acc_len()
+            if self._is_programmed():
+                self.get_acc_len()
         else:
             self.set_acc_len(self._default_acc_len)

@@ -152,6 +152,9 @@ class Block(object):
         Return a list of all register names associated with
         this block.
         """
+        if not self._is_programmed():
+            self._error("Can't listdev because board isn't programmed")
+            return []
         devs = self.host.listdev()
         return [x[len(self.prefix):] for x in devs if x.startswith(self.prefix)]
 
@@ -166,7 +169,9 @@ class Block(object):
         try:
             return self.host.read_int(self.prefix + reg, word_offset=word_offset, **kwargs)
         except:
-            if reg not in self.listdev():
+            if not self._is_programmed():
+                self._error("Tried to read register %s but board is not programmed!" % reg)
+            elif reg not in self.listdev():
                 self._error("Tried to read register %s which doesn't exist!" % reg)
             raise
 
@@ -180,7 +185,9 @@ class Block(object):
         try:
             self.host.write_int(self.prefix + reg, val, word_offset=word_offset, **kwargs)
         except:
-            if reg not in self.listdev():
+            if not self._is_programmed():
+                self._error("Tried to write register %s but board is not programmed!" % reg)
+            elif reg not in self.listdev():
                 self._error("Tried to read register %s which doesn't exist!" % reg)
             else:
                 # Only raise an exception if the register is there, otherwise
@@ -198,7 +205,9 @@ class Block(object):
         try:
             return self.host.read_uint(self.prefix + reg, word_offset=word_offset, **kwargs)
         except:
-            if reg not in self.listdev():
+            if not self._is_programmed():
+                self._error("Tried to read register %s but board is not programmed!" % reg)
+            elif reg not in self.listdev():
                 self._error("Tried to read register %s which doesn't exist!" % reg)
             raise
 
@@ -213,7 +222,9 @@ class Block(object):
         try:
             return self.host.read(self.prefix + reg, nbytes, **kwargs)
         except:
-            if reg not in self.listdev():
+            if not self._is_programmed():
+                self._error("Tried to read register %s but board is not programmed!" % reg)
+            elif reg not in self.listdev():
                 self._error("Tried to read register %s which doesn't exist!" % reg)
             raise
 
@@ -227,7 +238,9 @@ class Block(object):
         try:
             self.host.write(self.prefix + reg, val, offset=offset, **kwargs)
         except:
-            if reg not in self.listdev():
+            if not self._is_programmed():
+                self._error("Tried to read register %s but board is not programmed!" % reg)
+            elif reg not in self.listdev():
                 self._error("Tried to read register %s which doesn't exist!" % reg)
             else:
                 # Only raise an exception if the register is there, otherwise
@@ -244,12 +257,26 @@ class Block(object):
         try:
             self.host.blindwrite(self.prefix + reg, val, **kwargs)
         except:
-            if reg not in self.listdev():
+            if not self._is_programmed():
+                self._error("Tried to write register %s but board is not programmed!" % reg)
+            elif reg not in self.listdev():
                 self._error("Tried to read register %s which doesn't exist!" % reg)
             else:
                 # Only raise an exception if the register is there, otherwise
                 # just skip the write
                 raise
+
+    def _is_programmed(self):
+        """
+        A wrapper around CasperFpga's is_running() method.
+        Designed to be used to check whether it is legitimate
+        to carry out read/write transactions
+
+        :return: True if board is programmed, False otherwise.
+        :rtype: bool
+        """
+        return self.host.is_running()
+
 
     def change_reg_bits(self, reg, val, start, width=1):
         """
