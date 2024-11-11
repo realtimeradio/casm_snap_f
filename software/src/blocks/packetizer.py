@@ -3,6 +3,8 @@ import struct
 
 from .block import Block
 
+PROTOCOL_OVERHEAD_BYTES = 8 + 18 + 20 + 8 # app + Eth + IP + UDP
+
 class Packetizer(Block):
     """
     The packetizer block allows dynamic definition of
@@ -29,27 +31,40 @@ class Packetizer(Block):
     :param n_chans: Number of frequency channels in the correlation output.
     :type n_chans: int
 
-    :param n_signals: Number of independent analog streams in the system
+    :param n_signals: Number of independent analog streams in the system including
+        any dummy inputs.
     :type n_signals: int
+
+    :param n_signals: Number of independent analog streams in the system excluding
+        any dummy inputs.
+    :type n_signals: int
+
+    :param n_words_per_block: Granularity of packetizer words blocking. Blocks of channels
+        may be sent or not sent only in chunks of ``words_per_block``.
+    :type n_words_per_block: int
 
     :param sample_rate_mhz: ADC sample rate in MHz. Used for data rate checks.
     :type sample_rate_mhz: float
     """
     sample_width = 1 # Sample width in bytes: 4+4bit complex = 1 Byte
-    word_width = 32 # Granularity of packet size in Bytes
-    line_rate_gbps = 40 # Link speed in Gbits/s
-    def __init__(self, host, name, n_chans=4096, n_signals=64, sample_rate_mhz=200.0, logger=None):
+    word_width = 8 # Granularity of packet size in Bytes
+    line_rate_gbps = 10 # Link speed in Gbits/s
+    def __init__(self, host, name, n_chans=4096, n_signals=16, n_signals_real=12,
+            n_words_per_block=8, sample_rate_mhz=200.0, logger=None):
         super(Packetizer, self).__init__(host, name, logger)
         self.n_chans = n_chans
         self.n_signals = n_signals
+        self.n_signals_real = n_signals_real
+        self.n_words_per_block = n_words_per_block
         self.sample_rate_mhz = sample_rate_mhz
         self.n_total_words = self.sample_width * self.n_chans * self.n_signals // self.word_width
+        self.n_total_blocks = self.n_total_words // self.n_words_per_block
         self.n_words_per_chan = self.sample_width * self.n_signals // self.word_width
-        assert self.n_words_per_chan > 1, \
-            "Packetizer software not compatible with n_signals / word_width combination"
-        self.full_data_rate_gbps = 8*self.sample_width * self.n_signals * self.sample_rate_mhz*1e6/2. / 1.0e9
+        self.full_data_rate_gbps = 8 * self.sample_width * self.n_signals_real * self.sample_rate_mhz * 1e6/2. / 1.0e9
+        assert self.n_words_per_block % self.n_words_per_chan == 0, "Unsupported configuration!"
+        self.n_chans_per_block = self.n_words_per_block // self.n_words_per_chan
 
-    def get_packet_info(self, n_pkt_chans, occupation=0.95, chan_block_size=8):
+    def get_packet_info(self, n_pkt_chans, occupation=0.95):
         """
         Get the packet boundaries for packets containing a given number of
         frequency channels.
@@ -62,10 +77,6 @@ class Packetizer(Block):
             The calculation does not include application or protocol overhead,
             so must necessarily be < 1.
         :type occupation: float
-
-        :param chan_block_size: The granularity with which we can start packets.
-            I.e., packets must start on an n*`chan_block` boundary.
-        :type chan_block_size: int
 
         :return: packet_starts, packet_payloads, channel_indices
 
@@ -84,6 +95,8 @@ class Packetizer(Block):
                 Channels to be sent should be re-indexed so that they fall into
                 these ranges.
         """
+        assert n_pkt_chans % self.n_chans_per_block == 0, \
+            "channels per packet must be a mulitple of channels per block"
         assert occupation < 1, "Link occupation must be < 1"
         pkt_size = n_pkt_chans * self.n_words_per_chan * self.word_width
         assert pkt_size <= 8192, "Can't send packets > 8192 bytes!"
@@ -91,6 +104,8 @@ class Packetizer(Block):
         # Figure out what fraction of channels we can fit on the link
         self._info("Full data rate is %.2f Gbps" % self.full_data_rate_gbps)
         chan_frac = occupation * self.line_rate_gbps / self.full_data_rate_gbps
+        target_throughput = occupation * self.line_rate_gbps
+        self._info("Target maximum throughput is %.2f Gbps" % target_throughput)
         self._info("%.2f link occupation => Max %.2f bandwidth sent" % (occupation, chan_frac))
         # Round down to an integer number of channels
         n_sent_chans = int(np.floor(chan_frac * self.n_chans))
@@ -99,40 +114,63 @@ class Packetizer(Block):
         n_pkts = (n_sent_chans // n_pkt_chans)
         n_sent_chans = n_pkt_chans * n_pkts
         self._info("Will allocate %d channels in %d packets" % (n_sent_chans, n_pkts))
+        n_sent_blocks = n_sent_chans // self.n_chans_per_block
+        self._info("Will allocate %d blocks in %d packets" % (n_sent_blocks, n_pkts))
 
-        # Channels can only be sent in positions which are a multiple of chan_block_size
-        possible_chan_starts = range(0, self.n_chans, chan_block_size)
-        # Start words are these values scaled by number of words per channel _and_
-        # with 1 added -- data are delayed by 1 so that we can insert a header before word 0
-        possible_start_words = [(c*self.n_words_per_chan + 1) for c in possible_chan_starts]
+        overhead = (pkt_size + PROTOCOL_OVERHEAD_BYTES) / pkt_size
+        actual_throughput = n_sent_chans / self.n_chans * self.full_data_rate_gbps
+        actual_datarate = actual_throughput * overhead
+        self._info("Actual throughput is %.2f Gbps" % actual_throughput)
+        self._info("Packet size (payload only) is %d Bytes" % pkt_size)
+        self._info("Actual data rate with overhead is %.2f Gbps" % actual_datarate)
+        actual_occupancy = actual_datarate / self.line_rate_gbps
+        self._info("Link occupancy is %.2f%%" % actual_occupancy)
+        if actual_occupancy > 0.95:
+            self._critical("Required data rate is %.2f%% of line rate. This is unlikely to work" % actual_occupancy)
+        if actual_occupancy >= 1:
+            self._error("Required data rate is >line rate. This will not work.")
+            raise RuntimeError
 
-        # Now figure out how many of the total words we're going to use and divide up the deadtime
-        # Reckon on using a full n_words_per_chan block for a header, even though a header
-        # only needs a single word.
-        n_words_used = (n_sent_chans + n_pkts) * self.n_words_per_chan
-        spare_words = self.n_total_words - n_words_used # This is necessarily a multiple of n_words_per_chan
-        self._info("Number of words used: %d" % n_words_used)
-        self._info("Number of words spare: %d" % spare_words)
+        # Channels can only be sent in positions which are a multiple of n_chans_per_block 
+        possible_chan_starts = range(0, self.n_chans, self.n_chans_per_block)
+        # The first words of each packet
+        possible_start_words = [c*self.n_words_per_chan for c in possible_chan_starts]
+        #possible_start_words = [(c*self.n_words_per_chan + 1) for c in possible_chan_starts]
+
+        # Now figure out how many of the total blocks we're going to use and divide up the deadtime
+        n_blocks_used = n_sent_chans // self.n_chans_per_block
+        spare_blocks = self.n_total_blocks - n_blocks_used
+        spare_words = spare_blocks * self.n_words_per_block
+        self._info("Number of blocks used: %d" % n_blocks_used)
+        self._info("Number of blocks spare: %d" % spare_blocks)
+
         assert spare_words % self.n_words_per_chan == 0, "This shouldn't be possible!"
         assert spare_words >= 0, "Configuration doesn't have space for header words"
         # Allocate enough words per packet for the data and header
         spare_chans_per_packet = ((self.n_chans - n_sent_chans) // n_pkts)
         self._info("Number of spare chans per packet: %d" % spare_chans_per_packet)
-        spare_chans_per_packet = chan_block_size * ((spare_chans_per_packet // chan_block_size)-1)
+        # Round down to whole number of blocks
+        spare_chans_per_packet = self.n_chans_per_block * (spare_chans_per_packet // self.n_chans_per_block)
         self._info("Using %d spare chans per packet" % spare_chans_per_packet)
         packet_starts = []
         packet_payloads = []
         channel_indices = []
         w_cnt = 0
         for pkt in range(n_pkts):
-            packet_starts += [w_cnt]
-            w_cnt += 1
+            assert w_cnt % self.n_words_per_block == 0
+            packet_starts += [w_cnt // self.n_words_per_block]
+            #w_cnt += 1
             # Find place we can start a payload
             for i in possible_start_words:
                 if i >= w_cnt:
                     w_cnt = i
                     break
-            packet_payloads += [range(w_cnt, w_cnt + n_pkt_chans * self.n_words_per_chan)]
+            assert w_cnt % self.n_words_per_block == 0
+            assert (w_cnt + n_pkt_chans * self.n_words_per_chan) % self.n_words_per_block == 0
+            packet_payloads += [
+                    range(w_cnt // self.n_words_per_block,
+                    (w_cnt + n_pkt_chans * self.n_words_per_chan) // self.n_words_per_block)
+                    ]
             # And which channels would these be?
             channel_indices += [range(w_cnt // self.n_words_per_chan,
                                       w_cnt // self.n_words_per_chan + n_pkt_chans)]

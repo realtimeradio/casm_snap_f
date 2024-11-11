@@ -122,7 +122,8 @@ class SnapFengine():
         #: Control interface to Channel Reorder block
         self.reorder     = chanreorder.ChanReorder(self._cfpga, 'chan_reorder', n_chans=N_CHANS)
         #: Control interface to Packetizer block
-        self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=self.fs_hz / 1.e6)
+        self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=self.fs_hz / 1.e6,
+                n_signals=16, n_signals_real=N_INPUTS, n_chans=N_CHANS)
         #: Control interface to 10GbE interface block
         self.eth         = eth.Eth(self._cfpga, 'eth')
         #: Control interface to Correlation block
@@ -298,3 +299,68 @@ class SnapFengine():
         self._initialize_blocks()
         if initialize_adc:
             self.adc.initialize()
+
+    def update_timekeeping(self):
+        """
+        Update internal timekeeping logic.
+        """
+        self.sync.update_telescope_time()
+        # Wait for a couple of sync pulses to ensure period
+        # is known to firmware
+        self.sync.wait_for_sync()
+        self.sync.wait_for_sync()
+        self.sync.update_internal_time()
+
+    def configure(self,
+            source_ip = "100.100.100.100",
+            source_port = 10000,
+            program = True,
+            fpgfile = None,
+            dests = {
+                "100.100.100.101": [0,128],
+                },
+            macs = {
+                "100.100.100.100": 0x0202020a0a64,
+                "100.100.100.101": 0x0202020a0a65,
+                },
+            nchan_packet = 16,
+            fft_shift = None,
+            eq = None,
+            sw_sync = False,
+            enable_tx = True,
+            ):
+
+        if program:
+            self.program(fpgfile)
+
+        self.initialize()
+        self.eth.disable_tx() # Make explicit even though it is in initialize
+
+        if fft_shift is not None:
+            self.pfb.set_fftshift(fft_shift)
+
+        if eq is not None:
+            for eqi in eq:
+                self.eq.set_coeffs(eqi)
+
+        self.update_timekeeping()
+
+        for ip, mac in macs.items():
+            self.eth.add_arp_entry(ip, mac)
+
+        for dest, dest_chans in dests.items():
+            if dest not in macs:
+                self.logger.warning(f"IP {dest} has not MAC address. Your network might get flooded")
+
+        if source_ip not in macs:
+            self.logger.error(f"Source IP {source_ip} has not MAC address")
+            raise ValueError
+
+        self.eth.configure_source(macs[source_ip], source_ip, source_port)
+
+        self.sync.arm_sync()
+        if sw_sync:
+            self.sync.sw_sync()
+
+        if enable_tx:
+            self.eth.enable_tx()
