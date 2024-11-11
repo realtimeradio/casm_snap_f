@@ -27,14 +27,11 @@ from .blocks import packetizer
 from .blocks import eth
 from .blocks import corr
 
-PIPELINES_PER_XENG = 4
 
-N_INPUTS = 12  # ADC inputs per SNAP
-N_CHANS  = 2**12 # Frequency channels per input
-FENG_SOURCE_PORT = 10000 # UDP source port for data transmission
-MAC_BASE = 0x020203030400 # MAC base address for 10GbE interface
-IP_BASE = (10 << 24) + (41 << 16) + (0 << 8) + 100 # IP base address for 10GbE interface
+DEFAULT_N_INPUTS = 12  # ADC inputs per SNAP
+DEFAULT_N_CHANS = 2**12 # Frequency channels per input
 DEFAULT_SAMPLE_RATE_HZ = 250000000
+MAX_OUTPUT_OCCUPANCY = 0.9 # Only allow 3072 channels to be sent at 250 MHz sampling
 
 class SnapFengine():
     """
@@ -54,12 +51,23 @@ class SnapFengine():
     :typoe fs_hz: int
 
     """
-    def __init__(self, host, logger=None, fpgfile=None, fs_hz=DEFAULT_SAMPLE_RATE_HZ):
+    def __init__(self,
+            host,
+            logger=None,
+            fpgfile=None,
+            n_inputs=DEFAULT_N_INPUTS,
+            n_chans=DEFAULT_N_CHANS,
+            fs_hz=DEFAULT_SAMPLE_RATE_HZ
+        ):
         self.hostname = host #: hostname of the F-Engine's host board
         #: Python Logger instance
         self.logger = logger or helpers.add_default_log_handlers(logging.getLogger(__name__ + ":%s" % (host)))
         #: F-engine sample rate, in Hz
         self.fs_hz = fs_hz
+        #: Number of frequency channels per input signal
+        self.n_chans = n_chans
+        #: Number of ADC channels
+        self.n_inputs = n_inputs
         #: Underlying CasperFpga control instance
         self._cfpga = casperfpga.CasperFpga(
                         host=self.hostname,
@@ -100,34 +108,34 @@ class SnapFengine():
         #: Control interface to Synchronization / Timing block
         self.sync        = sync.Sync(self._cfpga, 'sync', use_loopback=True, fs_hz=self.fs_hz)
         #: Control interface to Noise Generation block
-        self.noise       = noisegen.NoiseGen(self._cfpga, 'noise', n_noise=2, n_outputs=N_INPUTS)
+        self.noise       = noisegen.NoiseGen(self._cfpga, 'noise', n_noise=2, n_outputs=self.n_inputs)
         #: Control interface to Input Multiplex block
-        self.input       = input.Input(self._cfpga, 'input', n_streams=16, n_real_streams=N_INPUTS, n_bits=8)
+        self.input       = input.Input(self._cfpga, 'input', n_streams=16, n_real_streams=self.n_inputs, n_bits=8)
         #: Control interface to Coarse Delay block
-        self.delay       = delay.Delay(self._cfpga, 'delay', n_streams=N_INPUTS)
+        self.delay       = delay.Delay(self._cfpga, 'delay', n_streams=self.n_inputs)
         #: Control interface to PFB block
         self.pfb         = pfb.Pfb(self._cfpga, 'pfb')
         #: Control interface to Autocorrelation block
         self.autocorr    = autocorr.AutoCorr(self._cfpga, 'autocorr',
                                              acc_len=1024,
-                                             n_signals=N_INPUTS,
+                                             n_signals=self.n_inputs,
                                              n_parallel_streams=1,
-                                             n_cores=N_INPUTS//2,
+                                             n_cores=self.n_inputs//2,
                                              use_mux=True,
                                              )
         #: Control interface to Equalization block
-        self.eq          = eq.Eq(self._cfpga, 'eq', n_inputs=N_INPUTS, n_parallel_inputs=N_INPUTS//2, n_coeffs=N_CHANS//8)
+        self.eq          = eq.Eq(self._cfpga, 'eq', n_inputs=self.n_inputs, n_parallel_inputs=self.n_inputs//2, n_coeffs=self.n_chans//8)
         #: Control interface to post-equalization Test Vector Generator block
-        self.eqtvg       = eqtvg.EqTvg(self._cfpga, 'eqtvg', n_streams=N_INPUTS, n_parallel_streams=N_INPUTS//2, n_chans=N_CHANS)
+        self.eqtvg       = eqtvg.EqTvg(self._cfpga, 'eqtvg', n_streams=self.n_inputs, n_parallel_streams=self.n_inputs//2, n_chans=self.n_chans)
         #: Control interface to Channel Reorder block
-        self.reorder     = chanreorder.ChanReorder(self._cfpga, 'chan_reorder', n_chans=N_CHANS)
+        self.reorder     = chanreorder.ChanReorder(self._cfpga, 'chan_reorder', n_chans=self.n_chans)
         #: Control interface to Packetizer block
         self.packetizer  = packetizer.Packetizer(self._cfpga, 'packetizer', sample_rate_mhz=self.fs_hz / 1.e6,
-                n_signals=16, n_signals_real=N_INPUTS, n_chans=N_CHANS, n_words_per_block=4)
+                n_signals=16, n_signals_real=self.n_inputs, n_chans=self.n_chans, n_words_per_block=4)
         #: Control interface to 10GbE interface block
         self.eth         = eth.Eth(self._cfpga, 'eth')
         #: Control interface to Correlation block
-        self.corr        = corr.Corr(self._cfpga,'corr_0', n_chans=N_CHANS, n_signals=N_INPUTS)
+        self.corr        = corr.Corr(self._cfpga,'corr_0', n_chans=self.n_chans, n_signals=self.n_inputs)
 
         # The order here can be important, blocks are initialized in the
         # order they appear here
@@ -311,30 +319,177 @@ class SnapFengine():
         self.sync.wait_for_sync()
         self.sync.update_internal_time()
 
+    def _configure_output(self, dests, nchan_packet=512, feng_id=0):
+        """
+        Configure the channel reordering and packetizer configuration
+        for chosen output parameters.
+
+        :param dests: List of dictionaries describing where packets should be sent. Each
+            list entry should have the following keys:
+
+              - 'ip' : The destination IP (as a dotted-quad string) to which packets
+                should be sent.
+              - 'port' : The destination UDP port to which packets should be sent.
+              - 'start_chan' : The first frequency channel number which should be sent
+                to this IP / port.
+              - 'nchan' : The number of channels which should be sent to this IP / port.
+                ``nchan`` should be a multiple of ``nchan_packet``.
+        :type dests: List of dict
+
+        :param nchan_packet: Number of frequency channels in each output F-engine
+            packet
+        :type nchan_packet: int
+
+        :param feng_id: Fengine ID to write to output UDP packet headers.
+        :type feng_id: int
+
+        :return: Raise ``RuntimeError`` if configuration is invalid.
+        """
+
+        # First check that each IP has an allowed number of output channels
+        for dest in dests:
+            assert "ip" in dest, "Each destination should have an 'ip' key"
+            assert "port" in dest, "Each destination should have a 'port' key"
+            assert "start_chan" in dest, "Each destination should have a 'start_chan' key"
+            assert "nchan" in dest, "Each destination should have an 'nchan' key"
+            ip = dest["ip"]
+            nchan = dest["nchan"]
+            if not dest["nchan"] % nchan_packet == 0:
+                self.logger.error(f"Number of channels destined for {ip} ({nchan}) is not a multiple of packet size ({nchan_packet})")
+                raise RuntimeError
+
+        # Get packet parameters
+        try:
+            starts, payloads, chans = self.packetizer.get_packet_info(nchan_packet, MAX_OUTPUT_OCCUPANCY)
+        except:
+            self.logger.error("Failed to get packet boundary information. See eth.get_packet_info()")
+            raise RuntimeError
+
+        max_packets = len(starts)
+
+        # Iterate though each packet and place channels appropriately
+        pn = 0 # packet number
+        pkt_dest_port = []
+        pkt_dest_ip = []
+        pkt_chan = []
+        pkt_feng_id = []
+        chan_map = np.zeros(self.n_chans, dtype=int)
+        for dest in dests:
+            npkt = dest["nchan"] // nchan_packet # packets to this address
+            for p in range(npkt):
+                if pn >= max_packets:
+                    self.logger.error("Tried to fill more packets than are available!")
+                    raise RuntimeError
+                first_chan = dest["start_chan"] + p * nchan_packet # first chan in this packet
+                chan_map[chans[pn]] = np.arange(first_chan, first_chan + nchan_packet)
+                pkt_dest_ip += [dest["ip"]]
+                pkt_dest_port += [dest["port"]]
+                pkt_chan += [first_chan]
+                pkt_feng_id += [feng_id]
+                pn += 1
+
+        # If we've made it to here, we have everything we need to configure the packetizer
+        self.packetizer.write_config(
+                starts[0:pn],
+                payloads[0:pn],
+                pkt_chan,
+                pkt_feng_id,
+                pkt_dest_ip,
+                pkt_dest_port,
+                self.n_inputs,
+                nchan_packet,
+                print_config=False,
+        )
+
+        self.reorder.set_channel_order(chan_map)
+
+
     def configure(self,
             source_ip = "100.100.100.100",
             source_port = 10000,
             program = True,
             fpgfile = None,
-            dests = {
-                "100.100.100.101": [0,128],
-                },
+            dests = [{
+                "ip" : "100.100.100.101",
+                "port" : 10000,
+                "start_chan" : 0,
+                "nchan" : 3072,
+                }],
             macs = {
                 "100.100.100.100": 0x0202020a0a64,
-                "100.100.100.101": 0x0202020a0a65,
+                "100.100.100.101": 0x506b4bd3c660,
                 },
-            nchan_packet = 16,
+            nchan_packet = 512,
             fft_shift = None,
             eq = None,
             sw_sync = False,
             enable_tx = True,
-            ):
+            feng_id = 0,
+        ):
+        """
+        Completely configure a SNAP F-engine.
+
+        :param source_ip: The IP address from which this board should send packets.
+        :type source_ip: str
+
+        :param source_port: The source UDP port from which F-engine packets should be sent.
+        :type source_port: int
+
+        :param program: If True, program the FPGA (either with the provided
+            fpgfile or the currently loaded firmware).
+            Also train the ADC-> FPGA links.
+        :type program: bool
+
+        :param fpgfile: Path to .fpg firmware file to load. If None, ask the SNAP board
+            what it is currently running.
+        :type fpgfile: str
+
+        :param dests: List of dictionaries describing where packets should be sent. Each
+            list entry should have the following keys:
+
+              - 'ip' : The destination IP (as a dotted-quad string) to which packets
+                should be sent.
+              - 'port' : The destination UDP port to which packets should be sent.
+              - 'start_chan' : The first frequency channel number which should be sent
+                to this IP / port.
+              - 'nchan' : The number of channels which should be sent to this IP / port.
+                ``nchan`` should be a multiple of ``nchan_packet``.
+        :type dests: List of dict
+
+        :param macs: Dictionary, keyed by dotted-quad string IP addresses, containing
+            MAC addresses for F-engine packet destinations. I.e., IP/MAC pairs for
+            packet destinations, and for the source board.
+        :type macs: dict
+
+        :param nchan_packet: Number of frequency channels in each output F-engine
+            packet
+        :type nchan_packet: int
+
+        :param fft_shift: If provided, set the F-engine FFT shift to the provided value.
+        :type fft_shift: int
+
+        :param eq: If provided, the list of pre-quantization equalization
+            coefficients to be loaded to F-engines. This should be multidimensional with
+            dimensions [n_inputs, eq.n_coeffs]
+        :type eq: list
+
+        :param sw_sync: If True, issue a software reset trigger, rather than waiting
+            for an external reset pulse to be received over SMA.
+        :type sw_sync: bool
+
+        :param enable_tx: If True, enable 10 GbE F-Engine Ethernet output.
+        :type enable_tx: bool
+
+        :param feng_id: Fengine ID to write to output UDP packet headers.
+        :type feng_id: int
+        """
 
         if program:
             self.program(fpgfile)
 
         self.initialize()
-        self.eth.disable_tx() # Make explicit even though it is in initialize
+        self.eth.reset() # Includes disable
+        self.eth.status_reset()
 
         if fft_shift is not None:
             self.pfb.set_fftshift(fft_shift)
@@ -343,20 +498,21 @@ class SnapFengine():
             for eqi in eq:
                 self.eq.set_coeffs(eqi)
 
-        self.update_timekeeping()
-
         for ip, mac in macs.items():
             self.eth.add_arp_entry(ip, mac)
 
-        for dest, dest_chans in dests.items():
-            if dest not in macs:
-                self.logger.warning(f"IP {dest} has not MAC address. Your network might get flooded")
+        for dest in dests:
+            if dest["ip"] not in macs:
+                self.logger.critical(f"IP {dest} has no MAC address specified. Your network might get flooded")
 
         if source_ip not in macs:
-            self.logger.error(f"Source IP {source_ip} has not MAC address")
+            self.logger.warning(f"Source IP {source_ip} has no MAC address")
             raise ValueError
 
         self.eth.configure_source(macs[source_ip], source_ip, source_port)
+        self._configure_output(dests, nchan_packet, feng_id)
+
+        self.update_timekeeping()
 
         self.sync.arm_sync()
         if sw_sync:

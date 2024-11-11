@@ -17,6 +17,7 @@ class Eth(Block):
     :type logger: logging.Logger
     """
     _CORE_NAME = 'ten_gbe' #: 10G core name in simulink
+    _N_WORD_BITS = 64 #: Number of bits per data word
     def __init__(self, host, name, logger=None):
         super(Eth, self).__init__(host, name, logger)
         self._get_eth_core()
@@ -63,7 +64,7 @@ class Eth(Block):
 
             - tx_of : Count of TX buffer overflow events.
             - tx_full : Count of TX buffer full events.
-            - tx_vld : Count of 256-bit words marked as valid for transmission.
+            - tx_vld : Count of words marked as valid for transmission.
             - tx_ctr: Count of transmission End-of-Frames marked valid.
             - gbps: Approximate Gbits/s transmission rate
 
@@ -82,13 +83,13 @@ class Eth(Block):
         stats['tx_ctr' ] = self.read_uint(self._CORE_NAME + '_txctr')
         c0 = self.read_uint(self._CORE_NAME + '_txvldctr')
         t0 = time.time()
-        time.sleep(0.1)
+        time.sleep(0.25)
         c1 = self.read_uint(self._CORE_NAME + '_txvldctr')
         t1 = time.time()
         # catch counter overflow
         if c1 < c0:
             c1 += 2**32
-        gbps = (c1 - c0) * 256 / 1e9 / (t1-t0)
+        gbps = (c1 - c0) * self._N_WORD_BITS / 1e9 / (t1-t0)
         stats['gbps' ] = gbps
         if stats['tx_of'] > 0:
             flags['tx_of'] = FENG_ERROR
@@ -140,12 +141,14 @@ class Eth(Block):
         """
         Enable Ethernet transmission.
         """
+        self._info("Enabling Ethernet interface")
         self.change_reg_bits('ctrl', 1, 1)
 
     def disable_tx(self):
         """
         Disable Ethernet transmission.
         """
+        self._info("Disabling Ethernet interface")
         self.change_reg_bits('ctrl', 0, 1)
 
     def initialize(self, read_only=False):

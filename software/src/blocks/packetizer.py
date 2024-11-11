@@ -3,7 +3,7 @@ import struct
 
 from .block import Block
 
-PROTOCOL_OVERHEAD_BYTES = 8 + 18 + 20 + 8 # app + Eth + IP + UDP
+PROTOCOL_OVERHEAD_BYTES = 16 + 18 + 20 + 8 # app + Eth + IP + UDP
 
 class Packetizer(Block):
     """
@@ -113,7 +113,7 @@ class Packetizer(Block):
         # Round down to a whole number of packets
         n_pkts = (n_sent_chans // n_pkt_chans)
         n_sent_chans = n_pkt_chans * n_pkts
-        self._info("Will allocate %d channels in %d packets" % (n_sent_chans, n_pkts))
+        self._info("Will allocate %d channels in %d packets (%d channels each)" % (n_sent_chans, n_pkts, n_pkt_chans))
         n_sent_blocks = n_sent_chans // self.n_chans_per_block
         self._info("Will allocate %d blocks in %d packets" % (n_sent_blocks, n_pkts))
 
@@ -180,10 +180,57 @@ class Packetizer(Block):
             # Add in padding space
             w_cnt += spare_chans_per_packet * self.n_words_per_chan
         return packet_starts, packet_payloads, channel_indices
+
+    def _format_flags(self, is_header=False, is_valid=False, is_eof=False):
+        flags = (int(is_eof) << 2) + (int(is_valid) << 1) + (int(is_header) << 0)
+        return flags
+
+    def _format_ant_chan(self, ant, chan):
+        return (ant << 16) + (chan << 0)
+
+    def _deformat_ant_chan(self, ant_chan):
+        chan = ant_chan & 0xffff
+        ant = (ant_chan >> 16) & 0xffff
+        return ant, chan
+
+    def _deformat_flags(self, f):
+        is_eof = bool((f >> 2) & 1)
+        is_vld = bool((f >> 1) & 1)
+        is_hdr = bool((f >> 0) & 1)
+        return is_hdr, is_vld, is_eof
+
+    def print_config(self, n=None):
+        """
+        Print the contents of the packetizer configuration registers.
+        Good for debugging.
+
+        :param n: Number of block entries to print. If None, print everything
+        :type n: int
+        """
+
+        if n is None:
+            n = self.n_total_blocks
+
+        ant_chans = np.frombuffer(self.read('ant_chan', self.n_total_blocks * 4), dtype='>u4')
+        ips   = np.frombuffer(self.read('ips', self.n_total_blocks * 4), dtype='>u4')
+        ports = np.frombuffer(self.read('ports', self.n_total_blocks * 2), dtype='>u2')
+        flags = np.frombuffer(self.read('flags', self.n_total_blocks * 1), dtype='>u1')
+
+        print('pkt : chan  ant  port  ip')
+        for i in range(n):
+            is_hdr, is_vld, is_eof = self._deformat_flags(flags[i])
+            ant, chan = self._deformat_ant_chan(ant_chans[i])
+            print('%4d: %4d %3d %.5d 0x%.8x' % (i, chan, ant, ports[i], ips[i]), end=' ')
+            if is_vld:
+                print('valid', end=' ')
+            if is_hdr:
+                print('header', end=' ')
+            if is_eof:
+                print('EOF', end=' ')
+            print()
         
     def write_config(self, packet_starts, packet_payloads, channel_indices,
-            ant_indices, dest_ips, dest_ports, nchans_per_packet, nchans_per_xeng,
-            n_signals_per_packet, n_signals_per_xeng, print_config=False):
+            ant_indices, dest_ips, dest_ports, n_pkt_antpols, n_pkt_chans, print_config=False):
         """
         Write the packetizer configuration BRAMs with appropriate entries.
 
@@ -213,18 +260,11 @@ class Packetizer(Block):
             UDP destination ports for each packet to be sent.
         :type dest_ports: list of int
 
-        :param nchans_per_packet: Number of frequency channels per packet sent.
-        :type nchans_per_packet: int
+        :param n_pkt_chans: Number of channels per packet.
+        :type n_pkt_chans: int
 
-        :param nchans_per_xeng: Total number of frequency channels sent to each
-            destination IP.
-        :type nchans_per_xeng: int
-
-        :param n_signals_per_packet: Number of signals in each packet sent.
-        :type n_signals_per_packet: int
-
-        :param n_signals_per_xeng: Number of signals expected by each destination IP.
-        :type n_signals_per_xeng: int
+        :param n_pkt_antpols: Numper of antpols per packet.
+        :type n_pkt_antpols: int
 
         :param print:
             If True, print config for debugging
@@ -233,15 +273,6 @@ class Packetizer(Block):
         All parameters should have identical lengths.
         """
 
-        def format_flags(is_header=False, is_valid=False, is_eof=False):
-            flags = (int(is_eof) << 16) + (int(is_valid) << 8) + (int(is_header) << 0)
-            return flags
-
-        def deformat_flags(f):
-            is_eof = bool((f >> 16) & 1)
-            is_vld = bool((f >>  8) & 1)
-            is_hdr = bool((f >>  0) & 1)
-            return is_hdr, is_vld, is_eof
 
         def ip2int(x):
             octets = list(map(int, x.split('.')))
@@ -259,44 +290,28 @@ class Packetizer(Block):
         assert len(dest_ips) == n_packets
         assert len(dest_ports) == n_packets
 
-        chans = [0] * self.n_total_words
-        ants  = [0] * self.n_total_words 
-        ips   = [0] * self.n_total_words 
-        ports = [0] * self.n_total_words
-        flags = [0] * self.n_total_words 
+        ant_chans = [0] * self.n_total_blocks
+        ips       = [0] * self.n_total_blocks
+        ports     = [0] * self.n_total_blocks
+        flags     = [0] * self.n_total_blocks
 
         for i in range(n_packets):
-            channel_index = channel_indices[i]
-            channel_block_id = (channel_index % nchans_per_xeng ) // nchans_per_packet
-            chans[packet_starts[i]] = (channel_block_id << 24) + channel_index
-            #print(channel_index, channel_block_id, chans[packet_starts[i]])
-            ants[packet_starts[i]]  = ant_indices[i]
-            flags[packet_starts[i]] = format_flags(is_header=True, is_valid=True)
+            ant_chans[packet_starts[i]] = self._format_ant_chan(ant_indices[i], channel_indices[i])
+            flags[packet_starts[i]] = self._format_flags(is_header=True, is_valid=True)
             for w in packet_payloads[i]:
-                flags[w] = format_flags(is_header=False, is_valid=True)
+                flags[w] = self._format_flags(is_header= w==packet_starts[i], is_valid=True)
             # Insert the Destination IP synchronous with the EOF
             ips[w]   = ip2int(dest_ips[i])
-            ports[w]   = dest_ports[i]
+            ports[w] = dest_ports[i]
             # Overwrite the last entry with the EOF
-            flags[w] = format_flags(is_header=False, is_valid=True, is_eof=True)
+            flags[w] = self._format_flags(is_header=False, is_valid=True, is_eof=True)
 
-        self.write('chans', struct.pack('>%dI' % self.n_total_words, *chans))
-        self.write('ants',  struct.pack('>%dI' % self.n_total_words, *ants))
-        self.write('ips',   struct.pack('>%dI' % self.n_total_words, *ips))
-        self.write('ports', struct.pack('>%dI' % self.n_total_words, *ports))
-        self.write('flags', struct.pack('>%dI' % self.n_total_words, *flags))
-
-        self.write_int('n_pols', (n_signals_per_packet<<16) + n_signals_per_xeng)
-        self.write_int('n_chans', (nchans_per_packet<<16) + nchans_per_xeng)
+        self.write('ant_chan', struct.pack('>%dI' % self.n_total_blocks, *ant_chans))
+        self.write('ips',   struct.pack('>%dI' % self.n_total_blocks, *ips))
+        self.write('ports', struct.pack('>%dH' % self.n_total_blocks, *ports))
+        self.write('flags', struct.pack('>%dB' % self.n_total_blocks, *flags))
+        self.write_int('n_chans', n_pkt_chans)
+        self.write_int('n_pols', n_pkt_antpols)
 
         if print_config:
-            for i in range(self.n_total_words):
-                is_hdr, is_vld, is_eof = deformat_flags(flags[i])
-                print('%4d: %4d %3d %.5d 0x%.8x' % (i, chans[i], ants[i], ports[i], ips[i]), end=' ')
-                if is_vld:
-                    print('valid', end=' ')
-                if is_hdr:
-                    print('header', end=' ')
-                if is_eof:
-                    print('EOF', end=' ')
-                print()
+            self.print_config(self.n_total_blocks)
